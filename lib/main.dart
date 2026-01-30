@@ -6,6 +6,8 @@ import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'models/transaction_model.dart';
+import 'success_result_screen.dart';
+import 'error_result_screen.dart';
 
 void main() {
   runApp(const MyApp());
@@ -247,6 +249,7 @@ class _MyHomePageState extends State<MyHomePage> {
   // State for Tap In/Out
   final Map<String, PendingTransaction> _pendingTransactions = {};
   final Uuid _uuid = const Uuid();
+  String _loadingStatus = 'System Starting...';
   static const String _storageKey = 'pending_transactions';
 
   @override
@@ -377,13 +380,11 @@ class _MyHomePageState extends State<MyHomePage> {
       transactions: [txnItem],
     );
 
-    // Show processing dialog or loading
+    // Show processing status
     if (mounted) {
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => const Center(child: CircularProgressIndicator()),
-      );
+      setState(() {
+        _loadingStatus = 'Processing...';
+      });
     }
 
     await _submitTransaction(payload, qrData.aid);
@@ -403,8 +404,8 @@ class _MyHomePageState extends State<MyHomePage> {
         body: jsonEncode(payload.toJson()),
       );
 
-      // Close loading dialog
-      if (mounted) Navigator.pop(context);
+      // Close loading dialog (not needed as we simply navigate away or show result)
+      // if (mounted) Navigator.pop(context);
 
       if (response.statusCode >= 200 && response.statusCode < 300) {
         setState(() {
@@ -413,8 +414,9 @@ class _MyHomePageState extends State<MyHomePage> {
         _savePendingTransactions();
         _showResultDialog(
           'Tap Out Success',
-          'Sent to API: ${response.statusCode}',
+          'ยอดคงเหลือ: 475.00 ฿', // Mock balance for POC
           isSuccess: true,
+          isTapOut: true,
         );
       } else {
         _showResultDialog(
@@ -425,7 +427,7 @@ class _MyHomePageState extends State<MyHomePage> {
       }
     } catch (e) {
       // Close loading dialog if error
-      if (mounted) Navigator.pop(context);
+      // if (mounted) Navigator.pop(context);
       _showResultDialog('Tap Out Error', '$e', isSuccess: false);
     }
   }
@@ -434,36 +436,111 @@ class _MyHomePageState extends State<MyHomePage> {
     String title,
     String message, {
     required bool isSuccess,
+    bool isTapOut = false,
   }) {
     if (!mounted) return;
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: Text(
-          title,
-          style: TextStyle(color: isSuccess ? Colors.green : Colors.red),
-        ),
-        content: Text(message, style: const TextStyle(fontSize: 18)),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context); // Close dialog
-              Navigator.pop(context); // Go back to WelcomeScreen
+
+    if (isSuccess) {
+      // Navigate to the full-screen Success Design
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (context) => SuccessResultScreen(
+            onDismiss: (ctx) {
+              Navigator.of(ctx).pushReplacement(
+                MaterialPageRoute(builder: (_) => const WelcomeScreen()),
+              );
             },
-            child: const Text('OK', style: TextStyle(fontSize: 20)),
+            title: isTapOut
+                ? 'สยามพารากอน'
+                : 'อนุสาวรีย์ชัยฯ', // Mock logic for POC
+            price: isTapOut ? '25.00 ฿' : '0.00 ฿', // Mock logic for POC
+            message: message,
+            isTapOut: isTapOut,
           ),
-        ],
-      ),
-    );
+        ),
+      );
+    } else {
+      // Navigate to the full-screen Error Design
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (context) => ErrorResultScreen(
+            onDismiss: (ctx) {
+              Navigator.of(ctx).pushReplacement(
+                MaterialPageRoute(builder: (_) => const WelcomeScreen()),
+              );
+            },
+            errorTitle: 'ทำรายการไม่สำเร็จ',
+            // errorMessage: message, // Use default static message per user request
+          ),
+        ),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    // Show a black screen to transition smoothly to camera
-    return const Scaffold(
-      backgroundColor: Colors.black,
-      body: SizedBox.shrink(),
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: SizedBox(
+          width: double.infinity,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Spacer(),
+              // Bus Icon (Simulated with standard icon and colors)
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.directions_bus_filled_rounded,
+                  size: 80,
+                  color: Colors.orange.shade800,
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // BMTA Text
+              const Text(
+                'ขสมก. BMTA',
+                style: TextStyle(
+                  color: Color(0xFF0D47A1), // Dark Blue
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // System Starting / Processing Text
+              Text(
+                _loadingStatus,
+                style: const TextStyle(
+                  color: Color(0xFF64B5F6), // Lighter Blue
+                  fontSize: 18,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+
+              const SizedBox(height: 40),
+
+              // Loader
+              const SizedBox(
+                width: 40,
+                height: 40,
+                child: CircularProgressIndicator(
+                  strokeWidth: 4,
+                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF0D47A1)),
+                ),
+              ),
+
+              const Spacer(),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
