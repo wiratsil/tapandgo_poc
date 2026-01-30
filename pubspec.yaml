@@ -42,6 +42,7 @@ dependencies:
   http: ^1.1.0
   uuid: ^4.2.0
   shared_preferences: ^2.2.0
+  wakelock_plus: ^1.4.0
 
 
 

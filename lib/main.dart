@@ -9,7 +9,11 @@ import 'models/transaction_model.dart';
 import 'success_result_screen.dart';
 import 'error_result_screen.dart';
 
-void main() {
+import 'package:wakelock_plus/wakelock_plus.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await WakelockPlus.enable();
   runApp(const MyApp());
 }
 
