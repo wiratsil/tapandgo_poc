@@ -44,6 +44,63 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
   final Uuid _uuid = const Uuid();
   static const String _storageKey = 'pending_transactions';
   bool _isProcessing = false;
+  bool _isLoading = false; // Add Loading State
+
+  // Loading UI Helper (Matches MyHomePage style)
+  Widget _buildLoadingUI() {
+    return Container(
+      width: double.infinity,
+      color: Colors.white,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          // Bus Icon
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: Colors.blue.shade50,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.directions_bus_filled_rounded,
+              size: 80,
+              color: Colors.orange.shade800,
+            ),
+          ),
+          const SizedBox(height: 24),
+          // BMTA Text
+          const Text(
+            'ขสมก. BMTA',
+            style: TextStyle(
+              color: Color(0xFF0D47A1), // Dark Blue
+              fontSize: 28,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 16),
+          // System Starting / Processing Text
+          const Text(
+            'กำลังประมวลผล...',
+            style: TextStyle(
+              color: Color(0xFF64B5F6), // Lighter Blue
+              fontSize: 18,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 40),
+          // Loader
+          const SizedBox(
+            width: 40,
+            height: 40,
+            child: CircularProgressIndicator(
+              strokeWidth: 4,
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF0D47A1)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -112,6 +169,13 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         // debugPrint('RF Card Detected!');
         // await _cpaySdkPlugin.beep(); // Commented out to prevent double beep
 
+        // IMMEDIATE LOADING STATE
+        if (mounted) {
+          setState(() {
+            _isLoading = true;
+          });
+        }
+
         // Try to get actual Card ID
         String cardId;
         try {
@@ -142,6 +206,11 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     } catch (e) {
       debugPrint('Check NFC Error: $e');
       _isProcessing = false; // Reset if error occurred early
+      if (mounted) {
+        setState(() {
+          _isLoading = false; // Reset loading
+        });
+      }
     }
   }
 
@@ -295,6 +364,11 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // If Loading, show Loading UI replacing everything
+    if (_isLoading) {
+      return Scaffold(backgroundColor: Colors.white, body: _buildLoadingUI());
+    }
+
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
