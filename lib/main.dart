@@ -29,8 +29,269 @@ class MyApp extends StatelessWidget {
   }
 }
 
-class WelcomeScreen extends StatelessWidget {
+class WelcomeScreen extends StatefulWidget {
   const WelcomeScreen({super.key});
+
+  @override
+  State<WelcomeScreen> createState() => _WelcomeScreenState();
+}
+
+class _WelcomeScreenState extends State<WelcomeScreen> {
+  final _cpaySdkPlugin = CpaySdkPlugin();
+
+  // Transaction State
+  final Map<String, PendingTransaction> _pendingTransactions = {};
+  final Uuid _uuid = const Uuid();
+  static const String _storageKey = 'pending_transactions';
+  bool _isProcessing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadPendingTransactions();
+      _startNfcPolling();
+    });
+  }
+
+  @override
+  void dispose() {
+    _isProcessing = true; // Stop polling
+    super.dispose();
+  }
+
+  Future<void> _loadPendingTransactions() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? jsonString = prefs.getString(_storageKey);
+      if (jsonString != null) {
+        final Map<String, dynamic> decoded = jsonDecode(jsonString);
+        if (mounted) {
+          setState(() {
+            decoded.forEach((key, value) {
+              _pendingTransactions[key] = PendingTransaction.fromJson(value);
+            });
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Error loading pending transactions: $e');
+    }
+  }
+
+  Future<void> _savePendingTransactions() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final data = _pendingTransactions.map(
+        (key, value) => MapEntry(key, value.toJson()),
+      );
+      await prefs.setString(_storageKey, jsonEncode(data));
+    } catch (e) {
+      debugPrint('Error saving pending transactions: $e');
+    }
+  }
+
+  Future<void> _startNfcPolling() async {
+    while (mounted && !_isProcessing) {
+      try {
+        await _checkNfcOnce();
+      } catch (e) {
+        debugPrint('NFC Poll Error: $e');
+      }
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+  }
+
+  Future<void> _checkNfcOnce() async {
+    if (_isProcessing) return;
+    try {
+      final isPresent = await _cpaySdkPlugin.isRfCardPresent();
+
+      if (isPresent == true) {
+        _isProcessing = true;
+        // debugPrint('RF Card Detected!');
+        // await _cpaySdkPlugin.beep(); // Commented out to prevent double beep
+
+        // Try to get actual Card ID
+        String cardId;
+        try {
+          final emvData = await _cpaySdkPlugin.readCardEmv().timeout(
+            const Duration(milliseconds: 500),
+            onTimeout: () => null,
+          );
+          if (emvData != null && emvData.isNotEmpty) {
+            // If returns JSON or raw data, use hash or data as ID
+            cardId = 'CARD-${emvData.hashCode}';
+          } else {
+            // Fallback to Fixed ID if read fails or returns null
+            cardId = 'TEST-CARD-1234';
+          }
+        } catch (e) {
+          debugPrint('Read EMV Failed: $e');
+          cardId = 'TEST-CARD-1234';
+        }
+
+        final nfcData = QrData(aid: cardId, bal: 100.00);
+
+        if (_pendingTransactions.containsKey(nfcData.aid)) {
+          await _handleTapOut(nfcData);
+        } else {
+          _handleTapIn(nfcData);
+        }
+      }
+    } catch (e) {
+      debugPrint('Check NFC Error: $e');
+      _isProcessing = false; // Reset if error occurred early
+    }
+  }
+
+  // Reuse existing logic for Tap In
+  void _handleTapIn(QrData qrData) {
+    final pending = PendingTransaction(
+      aid: qrData.aid,
+      tapInTime: DateTime.now().toUtc(),
+      tapInLoc: TransactionLocation(lat: 0.0, lng: 0.0), // Mock
+    );
+
+    setState(() {
+      _pendingTransactions[qrData.aid] = pending;
+    });
+    _savePendingTransactions();
+    _showResultDialog(
+      'Tap In Success',
+      'AID: ${qrData.aid}\nBalance: ${qrData.bal}',
+      isSuccess: true,
+    );
+  }
+
+  // Reuse existing logic for Tap Out
+  Future<void> _handleTapOut(QrData qrData) async {
+    final pending = _pendingTransactions[qrData.aid]!;
+    final tapOutTime = DateTime.now().toUtc();
+    final tapOutLoc = TransactionLocation(lat: 0.0, lng: 0.0);
+
+    final txnItem = TransactionItem(
+      txnId: _uuid.v4(),
+      assetId: qrData.aid,
+      assetType: 'QR', // Metadata says QR but using for NFC too for POC
+      tapInTime: pending.tapInTime.toIso8601String(),
+      tapInLoc: pending.tapInLoc,
+      tapOutTime: tapOutTime.toIso8601String(),
+      tapOutLoc: tapOutLoc,
+    );
+
+    final payload = TransactionRequest(
+      deviceId: 'ANDROID_POS_01',
+      plateNo: '12-3456',
+      transactions: [txnItem],
+    );
+
+    await _submitTransaction(payload, qrData.aid);
+  }
+
+  Future<void> _submitTransaction(
+    TransactionRequest payload,
+    String aid,
+  ) async {
+    final url = Uri.parse(
+      'https://08hh39x2-5274.asse.devtunnels.ms/tap/transactions',
+    );
+    try {
+      final response = await http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(payload.toJson()),
+      );
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        setState(() {
+          _pendingTransactions.remove(aid);
+        });
+        _savePendingTransactions();
+        _showResultDialog(
+          'Tap Out Success',
+          'ยอดคงเหลือ: 475.00 ฿',
+          isSuccess: true,
+          isTapOut: true,
+        );
+      } else {
+        _showResultDialog(
+          'Tap Out Failed',
+          'API Error: ${response.statusCode}',
+          isSuccess: false,
+        );
+      }
+    } catch (e) {
+      _showResultDialog('Tap Out Error', '$e', isSuccess: false);
+    }
+  }
+
+  void _showResultDialog(
+    String title,
+    String message, {
+    required bool isSuccess,
+    bool isTapOut = false,
+  }) {
+    if (!mounted) return;
+
+    // Resume polling after dialog is dismissed if needed,
+    // but typically we navigate back to Welcome (which is this screen)
+    // effectively resetting the state or just dismissing the dialog.
+    // For this flow, we push the ResultScreen.
+
+    if (isSuccess) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (context) => SuccessResultScreen(
+            onDismiss: (ctx) {
+              // When dismissed, go back to WelcomeScreen (reload it to restart polling)
+              Navigator.of(ctx).pushReplacement(
+                MaterialPageRoute(builder: (_) => const WelcomeScreen()),
+              );
+            },
+            title: isTapOut ? 'สยามพารากอน' : 'อนุสาวรีย์ชัยฯ',
+            price: isTapOut ? '25.00 ฿' : '0.00 ฿',
+            message: message,
+            isTapOut: isTapOut,
+          ),
+        ),
+      );
+    } else {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (context) => ErrorResultScreen(
+            onDismiss: (ctx) {
+              Navigator.of(ctx).pushReplacement(
+                MaterialPageRoute(builder: (_) => const WelcomeScreen()),
+              );
+            },
+            errorTitle: 'ทำรายการไม่สำเร็จ',
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _manualTestNfc() async {
+    debugPrint('Manual NFC Test Triggered');
+    try {
+      final isPresent = await _cpaySdkPlugin.isRfCardPresent();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('isRfCardPresent: $isPresent'),
+            duration: const Duration(seconds: 1),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -105,6 +366,20 @@ class WelcomeScreen extends StatelessWidget {
               const Text(
                 'รองรับบัตร ขสมก. / บัตรเครดิต',
                 style: TextStyle(color: Colors.white70, fontSize: 16),
+              ),
+
+              const SizedBox(height: 20),
+              // TEST BUTTON
+              TextButton.icon(
+                onPressed: _manualTestNfc,
+                icon: const Icon(Icons.nfc, color: Colors.white),
+                label: const Text(
+                  'Test isRfCardPresent',
+                  style: TextStyle(color: Colors.white),
+                ),
+                style: TextButton.styleFrom(
+                  backgroundColor: Colors.white.withOpacity(0.2),
+                ),
               ),
 
               const Spacer(),
@@ -252,13 +527,19 @@ class _MyHomePageState extends State<MyHomePage> {
   String _loadingStatus = 'System Starting...';
   static const String _storageKey = 'pending_transactions';
 
+  // Guard to prevent multiple processing
+  bool _isProcessing = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadPendingTransactions().then((_) {
-        // Trigger scan immediately after loading data
-        if (mounted) _scanQr();
+        // Trigger both Scan and NFC
+        if (mounted) {
+          _scanQr();
+          _startNfcPolling();
+        }
       });
     });
   }
@@ -300,23 +581,87 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
+  Future<void> _startNfcPolling() async {
+    // Polling loop for RF Card Presence
+    while (mounted && !_isProcessing) {
+      try {
+        await _checkNfcOnce();
+      } catch (e) {
+        debugPrint('NFC Poll Error: $e');
+      }
+      // Wait before next poll
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+  }
+
+  Future<void> _checkNfcOnce() async {
+    if (_isProcessing) return;
+    try {
+      final isPresent = await _cpaySdkPlugin.isRfCardPresent();
+      debugPrint('isRfCardPresent result: $isPresent');
+
+      if (isPresent == true) {
+        _isProcessing = true;
+        debugPrint('RF Card Detected!');
+        await _cpaySdkPlugin.beep();
+
+        final mockAid = 'RF-${DateTime.now().millisecondsSinceEpoch}';
+        final nfcData = QrData(aid: mockAid, bal: 100.00);
+
+        if (_pendingTransactions.containsKey(nfcData.aid)) {
+          await _handleTapOut(nfcData);
+        } else {
+          _handleTapIn(nfcData);
+        }
+      }
+    } catch (e) {
+      debugPrint('Check NFC Error: $e');
+    }
+  }
+
+  Future<void> _manualTestNfc() async {
+    debugPrint('Manual NFC Test Triggered');
+    try {
+      final isPresent = await _cpaySdkPlugin.isRfCardPresent();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('isRfCardPresent: $isPresent'),
+            duration: const Duration(seconds: 1),
+          ),
+        );
+      }
+      if (isPresent == true) {
+        await _checkNfcOnce();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
+    }
+  }
+
   Future<void> _scanQr() async {
+    if (_isProcessing) return;
     try {
       final result = await _cpaySdkPlugin.scan(
         isFrontCamera: true,
         timeout: 60000,
       );
 
-      if (result != null) {
+      if (result != null && !_isProcessing) {
+        _isProcessing = true;
         await _processQrData(result);
       } else {
-        // Scan cancelled or timed out (returned null)
-        if (mounted) _navigateToWelcome();
+        // Scan cancelled or timed out
+        // Only navigate back if we haven't processed a card
+        if (mounted && !_isProcessing) _navigateToWelcome();
       }
     } catch (e) {
-      // Handle error gracefully (likely a timeout or camera issue)
       debugPrint('Scan Error: $e');
-      if (mounted) _navigateToWelcome();
+      if (mounted && !_isProcessing) _navigateToWelcome();
     }
   }
 
@@ -537,6 +882,14 @@ class _MyHomePageState extends State<MyHomePage> {
               ),
 
               const Spacer(),
+
+              TextButton.icon(
+                onPressed: _manualTestNfc,
+                icon: const Icon(Icons.nfc),
+                label: const Text('Test Test isRfCardPresent'),
+              ),
+
+              const SizedBox(height: 10),
             ],
           ),
         ),
