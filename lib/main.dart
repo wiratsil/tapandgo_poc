@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
@@ -56,7 +57,10 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
   final Uuid _uuid = const Uuid();
   static const String _storageKey = 'pending_transactions';
   bool _isProcessing = false;
-  bool _isLoading = false; // Add Loading State
+  bool _isLoading = false;
+
+  String _timeString = '00:00';
+  Timer? _timer;
 
   // Loading UI Helper (Matches MyHomePage style)
   Widget _buildLoadingUI() {
@@ -120,13 +124,27 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadPendingTransactions();
       _startNfcPolling();
-      // MobileScanner starts widget-side
       _scannerController.start();
+      _updateTime(); // Update time immediately
+      _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
     });
+  }
+
+  void _updateTime() {
+    final now = DateTime.now();
+    // Manual formatting to avoid intl dependency if not present
+    final hour = now.hour.toString().padLeft(2, '0');
+    final minute = now.minute.toString().padLeft(2, '0');
+    if (mounted) {
+      setState(() {
+        _timeString = '$hour:$minute';
+      });
+    }
   }
 
   @override
   void dispose() {
+    _timer?.cancel();
     _isProcessing = true; // Stop polling
     _scannerController.dispose();
     super.dispose();
@@ -442,35 +460,70 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
               width: double.infinity,
               child: Column(
                 children: [
-                  // Top Bar
-                  Padding(
+                  // 1. Top Status Bar
+                  Container(
+                    width: double.infinity,
+                    color: Colors.black.withOpacity(0.2), // Slight contrast
                     padding: const EdgeInsets.symmetric(
                       horizontal: 16.0,
-                      vertical: 12.0,
+                      vertical: 8.0,
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
+                        // Left: BMTA | Time
+                        Text(
+                          'ขสมก. BMTA  |  $_timeString',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        // Right: Signal
                         Row(
                           children: const [
-                            Icon(Icons.location_on, color: Colors.pinkAccent),
-                            SizedBox(width: 8),
                             Text(
-                              'อนุสาวรีย์ชัยฯ',
+                              'สัญญาณปกติ',
                               style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
+                                color: Colors.greenAccent, // Green for 'Normal'
+                                fontSize: 14,
                               ),
+                            ),
+                            SizedBox(width: 8),
+                            Icon(
+                              Icons.signal_cellular_4_bar,
+                              color: Colors.greenAccent,
+                              size: 20,
                             ),
                           ],
                         ),
-                        const Text(
-                          'EN | TH',
+                      ],
+                    ),
+                  ),
+
+                  // 2. Location Bar
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 8,
+                      horizontal: 16,
+                    ),
+                    color: Colors.black.withOpacity(0.1),
+                    child: Row(
+                      children: const [
+                        Icon(
+                          Icons.location_on,
+                          color: Colors.pinkAccent,
+                          size: 20,
+                        ),
+                        SizedBox(width: 8),
+                        Text(
+                          'สถานีปัจจุบัน: อนุสาวรีย์ชัยฯ',
                           style: TextStyle(
-                            color: Colors.yellow,
+                            color: Colors.white,
                             fontSize: 16,
-                            fontWeight: FontWeight.bold,
+                            fontWeight: FontWeight.w500,
                           ),
                         ),
                       ],
@@ -487,17 +540,17 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                   ),
                   const SizedBox(height: 24),
                   const Text(
-                    'กรุณาแตะบัตร / สแกน QR',
+                    'กรุณาแตะบัตร', // Updated Text
                     style: TextStyle(
                       color: Colors.white,
-                      fontSize: 28,
+                      fontSize: 32,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
                   const SizedBox(height: 12),
                   const Text(
-                    'รองรับบัตร ขสมก. / บัตรเครดิต',
-                    style: TextStyle(color: Colors.white70, fontSize: 16),
+                    'รองรับบัตรเครดิต', // Updated Sub-text
+                    style: TextStyle(color: Colors.white70, fontSize: 18),
                   ),
 
                   const SizedBox(height: 20),
