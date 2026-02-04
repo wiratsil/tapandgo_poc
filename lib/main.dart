@@ -307,9 +307,12 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     });
     _savePendingTransactions();
     _showResultDialog(
-      'Tap In Success',
-      'AID: ${qrData.aid}\nBalance: ${qrData.bal}',
+      'อนุสาวรีย์ชัยฯ', // Location
+      'บันทึกจุดขึ้นรถแล้ว', // Main Message
       isSuccess: true,
+      price: null, // Hide price
+      topStatus: 'เริ่มต้นเดินทาง',
+      instruction: 'กรุณาแตะบัตรอีกครั้งเมื่อลงรถ',
     );
   }
 
@@ -343,7 +346,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     String aid,
   ) async {
     final url = Uri.parse(
-      'https://08hh39x2-5274.asse.devtunnels.ms/tap/transactions',
+      'https://tng-platform-dev.atlasicloud.com/api/tng/tap/transactions',
     );
     try {
       final response = await http.post(
@@ -358,10 +361,14 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         });
         _savePendingTransactions();
         _showResultDialog(
-          'Tap Out Success',
-          'ยอดคงเหลือ: 475.00 ฿',
+          'สยามพารากอน', // Location (Drop-off)
+          'ขอบคุณที่ใช้บริการ', // Main Message
           isSuccess: true,
           isTapOut: true,
+          price: '25.00 ฿', // Fare
+          balance: '475.00 ฿', // Balance
+          topStatus: 'ชำระเงินสำเร็จ',
+          instruction: 'เดินทางปลอดภัย',
         );
       } else {
         _showResultDialog(
@@ -380,6 +387,10 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     String message, {
     required bool isSuccess,
     bool isTapOut = false,
+    String? price,
+    String? balance,
+    String? topStatus,
+    String? instruction,
   }) {
     if (!mounted) return;
 
@@ -398,10 +409,13 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                 MaterialPageRoute(builder: (_) => const WelcomeScreen()),
               );
             },
-            title: isTapOut ? 'สยามพารากอน' : 'อนุสาวรีย์ชัยฯ',
-            price: isTapOut ? '25.00 ฿' : '0.00 ฿',
+            title: title, // This is location name
             message: message,
+            price: price ?? (isTapOut ? '25.00 ฿' : null),
+            balance: balance,
             isTapOut: isTapOut,
+            topStatus: topStatus,
+            instruction: instruction,
           ),
         ),
       );
