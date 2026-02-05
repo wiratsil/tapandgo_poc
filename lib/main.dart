@@ -12,6 +12,7 @@ import 'error_result_screen.dart';
 
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'services/nearby_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -62,7 +63,78 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
   String _timeString = '00:00';
   Timer? _timer;
 
-  // Loading UI Helper (Matches MyHomePage style)
+  // Sync State
+  String _plateNo = '12-3456'; // Default
+  String _role = 'DRIVER'; // DRIVER or PASSENGER
+  bool _isSynced = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadPendingTransactions();
+      _startNfcPolling();
+      _scannerController.start();
+      _updateTime(); // Update time immediately
+      _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
+
+      // Auto-start Sync
+      _initSync();
+    });
+  }
+
+  void _initSync() {
+    final nearby = NearbyService();
+    nearby.checkPermissions().then((granted) {
+      if (granted) {
+        if (_role == 'DRIVER') {
+          nearby.startAdvertising(_plateNo);
+        } else {
+          nearby.startDiscovery(_plateNo);
+        }
+      }
+    });
+
+    nearby.onDataReceived = (data) {
+      debugPrint('Sync Data: $data');
+      try {
+        final map = jsonDecode(data);
+        if (map['type'] == 'TAP_IN') {
+          // Sync Tap In logic
+          final aid = map['aid'];
+          final time = DateTime.parse(map['time']);
+          if (!_pendingTransactions.containsKey(aid)) {
+            setState(() {
+              _pendingTransactions[aid] = PendingTransaction(
+                aid: aid,
+                tapInTime: time,
+                tapInLoc: TransactionLocation(lat: 0, lng: 0),
+              );
+            });
+            _savePendingTransactions();
+          }
+        } else if (map['type'] == 'TAP_OUT') {
+          // Sync Tap Out logic
+          final aid = map['aid'];
+          setState(() {
+            _pendingTransactions.remove(aid);
+          });
+          _savePendingTransactions();
+        }
+      } catch (e) {
+        /* ignore */
+      }
+    };
+
+    nearby.onStatusChanged = (status) {
+      if (status.contains('Connected')) {
+        setState(() => _isSynced = true);
+      } else if (status.contains('Disconnected')) {
+        setState(() => _isSynced = false);
+      }
+    };
+  }
+
   Widget _buildLoadingUI() {
     return Container(
       width: double.infinity,
@@ -116,18 +188,6 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         ],
       ),
     );
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _loadPendingTransactions();
-      _startNfcPolling();
-      _scannerController.start();
-      _updateTime(); // Update time immediately
-      _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
-    });
   }
 
   void _updateTime() {
@@ -302,6 +362,14 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
       tapInLoc: TransactionLocation(lat: 0.0, lng: 0.0), // Mock
     );
 
+    // Broadcast Tap In
+    final nearby = NearbyService();
+    nearby.sendData({
+      'type': 'TAP_IN',
+      'aid': qrData.aid,
+      'time': pending.tapInTime.toIso8601String(),
+    });
+
     setState(() {
       _pendingTransactions[qrData.aid] = pending;
     });
@@ -318,9 +386,16 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
 
   // Reuse existing logic for Tap Out
   Future<void> _handleTapOut(QrData qrData) async {
+    // ... validate transaction exists ...
+    if (!_pendingTransactions.containsKey(qrData.aid)) return;
+
     final pending = _pendingTransactions[qrData.aid]!;
     final tapOutTime = DateTime.now().toUtc();
     final tapOutLoc = TransactionLocation(lat: 0.0, lng: 0.0);
+
+    // Broadcast Tap Out (Before or After API, but mainly to clear peer pending list)
+    final nearby = NearbyService();
+    nearby.sendData({'type': 'TAP_OUT', 'aid': qrData.aid});
 
     final txnItem = TransactionItem(
       txnId: _uuid.v4(),
@@ -435,6 +510,87 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     }
   }
 
+  void _showSettingsDialog() {
+    final plateController = TextEditingController(text: _plateNo);
+    // Temporary variables to hold state changes in dialog
+    String tempRole = _role;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setStateDialog) {
+            return AlertDialog(
+              title: const Text('ตั้งค่าระบบ'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Role Selection
+                  const Text(
+                    'ตำแหน่งอุปกรณ์:',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  RadioListTile<String>(
+                    title: const Text('คนขับ (Driver)'),
+                    value: 'DRIVER',
+                    groupValue: tempRole,
+                    onChanged: (val) {
+                      setStateDialog(() => tempRole = val!);
+                    },
+                  ),
+                  RadioListTile<String>(
+                    title: const Text('ประตูหลัง (Passenger)'),
+                    value: 'PASSENGER',
+                    groupValue: tempRole,
+                    onChanged: (val) {
+                      setStateDialog(() => tempRole = val!);
+                    },
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // Plate No Input
+                  TextField(
+                    controller: plateController,
+                    decoration: const InputDecoration(
+                      labelText: 'หมายเลขข้างรถ (Plate No)',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('ยกเลิก'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    // Save Settings and Restart Sync
+                    setState(() {
+                      _role = tempRole;
+                      _plateNo = plateController.text;
+                      _isSynced = false;
+                    });
+
+                    // Restart Nearby Service
+                    final nearby = NearbyService();
+                    nearby.stopAll().then((_) {
+                      _initSync();
+                    });
+
+                    Navigator.pop(context);
+                  },
+                  child: const Text('บันทึก'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
@@ -494,21 +650,35 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                             fontWeight: FontWeight.bold,
                           ),
                         ),
-                        // Right: Signal
+                        // Right: Signal & Settings
                         Row(
-                          children: const [
-                            Text(
-                              'สัญญาณปกติ',
-                              style: TextStyle(
-                                color: Colors.greenAccent, // Green for 'Normal'
-                                fontSize: 14,
-                              ),
-                            ),
-                            SizedBox(width: 8),
-                            Icon(
+                          children: [
+                            // Signal Icon Only
+                            const Icon(
                               Icons.signal_cellular_4_bar,
                               color: Colors.greenAccent,
                               size: 20,
+                            ),
+                            const SizedBox(width: 8),
+
+                            // Sync Status Icon
+                            Icon(
+                              _isSynced ? Icons.link : Icons.link_off,
+                              color: _isSynced
+                                  ? Colors.greenAccent
+                                  : Colors.white30,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+
+                            // Settings Button
+                            GestureDetector(
+                              onTap: _showSettingsDialog,
+                              child: const Icon(
+                                Icons.settings,
+                                color: Colors.white54,
+                                size: 24,
+                              ),
                             ),
                           ],
                         ),
@@ -576,6 +746,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                     decoration: BoxDecoration(
                       color: Colors.black.withOpacity(0.3),
                       borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.white30),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
