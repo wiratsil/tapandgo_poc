@@ -59,6 +59,8 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
   bool _isProcessing = false;
   bool _isLoading = false;
 
+  String _plateNumber = '12-3456'; // Default License Plate
+
   String _timeString = '00:00';
   Timer? _timer;
 
@@ -334,7 +336,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
 
     final payload = TransactionRequest(
       deviceId: 'ANDROID_POS_01',
-      plateNo: '12-3456',
+      plateNo: _plateNumber, // Use dynamic plate number
       transactions: [txnItem],
     );
 
@@ -571,18 +573,68 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                   const Spacer(),
 
                   // Bottom Status Indicators
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.3),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 16.0),
                     child: Row(
-                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        _buildStatusIcon(Icons.camera_alt, true),
+                        // License Plate Editor
+                        GestureDetector(
+                          onTap: _showEditPlateDialog,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.3),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(color: Colors.white54),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.directions_bus,
+                                  color: Colors.white,
+                                  size: 20,
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  _plateNumber,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                const Icon(
+                                  Icons.edit,
+                                  color: Colors.white70,
+                                  size: 16,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
                         const SizedBox(width: 16),
-                        _buildStatusIcon(Icons.credit_card, true),
+
+                        // Existing Status Icons
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.3),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _buildStatusIcon(Icons.camera_alt, true),
+                              const SizedBox(width: 16),
+                              _buildStatusIcon(Icons.credit_card, true),
+                            ],
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -611,6 +663,46 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  void _showEditPlateDialog() {
+    final TextEditingController controller = TextEditingController(
+      text: _plateNumber,
+    );
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('แก้ไขหมายเลขทะเบียนรถ'),
+          content: TextField(
+            controller: controller,
+            decoration: const InputDecoration(
+              labelText: 'หมายเลขทะเบียน',
+              hintText: 'ตัวอย่าง: 12-3456',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('ยกเลิก'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                if (controller.text.isNotEmpty) {
+                  setState(() {
+                    _plateNumber = controller.text;
+                  });
+                }
+                Navigator.of(context).pop();
+              },
+              child: const Text('บันทึก'),
+            ),
+          ],
+        );
+      },
     );
   }
 }
