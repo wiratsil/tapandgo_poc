@@ -47,7 +47,8 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
 
   // MobileScanner
   final MobileScannerController _scannerController = MobileScannerController(
-    detectionSpeed: DetectionSpeed.noDuplicates,
+    detectionSpeed:
+        DetectionSpeed.normal, // Changed to normal to ensure triggers
     facing: CameraFacing.front,
     formats: [BarcodeFormat.qrCode],
   );
@@ -124,12 +125,27 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadPlateNumber(); // Load Saved Plate Number
       _loadPendingTransactions();
       _startNfcPolling();
-      _scannerController.start();
+      // _scannerController.start(); // REMOVED: Managed by MobileScanner widget to prevent double-start error
       _updateTime(); // Update time immediately
       _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
     });
+  }
+
+  Future<void> _loadPlateNumber() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedPlate = prefs.getString('plate_number');
+      if (savedPlate != null && mounted) {
+        setState(() {
+          _plateNumber = savedPlate;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading plate number: $e');
+    }
   }
 
   void _updateTime() {
@@ -257,6 +273,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     if (barcodes.isNotEmpty) {
       final code = barcodes.first.rawValue;
       if (code != null) {
+        debugPrint('QR Scanned Raw: $code'); // Debug Log
         _isProcessing = true;
 
         try {
@@ -275,15 +292,23 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     }
   }
 
-  Future<void> _processQrString(String jsonString) async {
+  Future<void> _processQrString(String rawString) async {
     try {
-      final Map<String, dynamic> data = jsonDecode(jsonString);
-      final qrData = QrData.fromJson(data);
+      QrData qrData;
+      try {
+        // Try strict JSON parsing first
+        final Map<String, dynamic> data = jsonDecode(rawString);
+        qrData = QrData.fromJson(data);
+      } catch (_) {
+        // Fallback: Use the raw string as the ID
+        debugPrint('QR is not JSON, using raw string as ID');
+        qrData = QrData(aid: rawString, bal: 0.0);
+      }
 
       if (_pendingTransactions.containsKey(qrData.aid)) {
         await _handleTapOut(qrData);
       } else {
-        _handleTapIn(qrData);
+        await _handleTapIn(qrData);
       }
     } catch (e) {
       debugPrint('QR Processing Error: $e');
@@ -297,7 +322,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
   }
 
   // Reuse existing logic for Tap In
-  void _handleTapIn(QrData qrData) {
+  Future<void> _handleTapIn(QrData qrData) async {
     final pending = PendingTransaction(
       aid: qrData.aid,
       tapInTime: DateTime.now().toUtc(),
@@ -307,7 +332,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     setState(() {
       _pendingTransactions[qrData.aid] = pending;
     });
-    _savePendingTransactions();
+    await _savePendingTransactions();
     _showResultDialog(
       'อนุสาวรีย์ชัยฯ', // Location
       'บันทึกจุดขึ้นรถแล้ว', // Main Message
@@ -374,13 +399,13 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         );
       } else {
         _showResultDialog(
-          'Tap Out Failed',
-          'API Error: ${response.statusCode}',
+          'ทำรายการไม่สำเร็จ',
+          'รหัสข้อผิดพลาด: ${response.statusCode}',
           isSuccess: false,
         );
       }
     } catch (e) {
-      _showResultDialog('Tap Out Error', '$e', isSuccess: false);
+      _showResultDialog('เกิดข้อผิดพลาด', '$e', isSuccess: false);
     }
   }
 
@@ -456,16 +481,44 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
             ),
           ),
 
-          // Layer 2: Overlay UI (Opaque)
+          // Layer 2: Overlay UI (Semi-Transparent Tint)
           Container(
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
                 colors: [
-                  Color(0xFF1B5E20), // Dark Green
-                  Color(0xFF0D47A1), // Dark Blue
+                  const Color(
+                    0xFF1B5E20,
+                  ).withOpacity(0.5), // Dark Green with 30% opacity
+                  const Color(
+                    0xFF0D47A1,
+                  ).withOpacity(0.5), // Dark Blue with 30% opacity
                 ],
+              ),
+            ),
+          ),
+
+          // Debug/Reset Button (Top Right hidden area)
+          Positioned(
+            top: 40,
+            right: 16,
+            child: GestureDetector(
+              onLongPress: () {
+                // Secret reset
+                setState(() {
+                  _isProcessing = false;
+                  _isLoading = false;
+                });
+                _scannerController.start();
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(const SnackBar(content: Text('Scanner Reset')));
+              },
+              child: Container(
+                color: Colors.transparent,
+                width: 40,
+                height: 40,
               ),
             ),
           ),
@@ -690,13 +743,16 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
               child: const Text('ยกเลิก'),
             ),
             ElevatedButton(
-              onPressed: () {
+              onPressed: () async {
                 if (controller.text.isNotEmpty) {
                   setState(() {
                     _plateNumber = controller.text;
                   });
+                  // Save to SharedPreferences
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setString('plate_number', _plateNumber);
                 }
-                Navigator.of(context).pop();
+                if (mounted) Navigator.of(context).pop();
               },
               child: const Text('บันทึก'),
             ),
