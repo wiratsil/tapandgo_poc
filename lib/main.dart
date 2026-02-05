@@ -325,10 +325,10 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     final txnItem = TransactionItem(
       txnId: _uuid.v4(),
       assetId: qrData.aid,
-      assetType: 'QR', // Metadata says QR but using for NFC too for POC
-      tapInTime: pending.tapInTime.toIso8601String(),
+      assetType: 'QR',
+      tapInTime: pending.tapInTime.toUtc().toIso8601String(), // Ensure UTC
       tapInLoc: pending.tapInLoc,
-      tapOutTime: tapOutTime.toIso8601String(),
+      tapOutTime: tapOutTime.toUtc().toIso8601String(), // Ensure UTC
       tapOutLoc: tapOutLoc,
     );
 
