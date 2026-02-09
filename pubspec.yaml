@@ -44,6 +44,8 @@ dependencies:
   shared_preferences: ^2.2.0
   wakelock_plus: ^1.4.0
   permission_handler: ^11.3.1
+  socket_io_client: ^2.0.3+1
+  network_info_plus: ^6.1.3
 
 
 

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:cpay_sdk_plugin/cpay_sdk_plugin.dart';
@@ -10,6 +11,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'models/transaction_model.dart';
 import 'success_result_screen.dart';
 import 'error_result_screen.dart';
+import 'wifi_sync_screen.dart';
+import 'services/wifi_sync_service.dart';
 
 import 'package:wakelock_plus/wakelock_plus.dart';
 
@@ -57,6 +60,10 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   bool _isBackgroundScanningActive = false;
   StreamSubscription<String>? _qrSubscription;
   StreamSubscription<bool>? _nfcSubscription;
+
+  // WiFi Sync for pending transactions
+  final WifiSyncService _syncService = WifiSyncService();
+  StreamSubscription<PendingTransactionSync>? _pendingSyncSubscription;
 
   String _plateNumber = '12-3456';
   String _timeString = '00:00';
@@ -121,8 +128,37 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       _loadPlateNumber();
       _loadPendingTransactions();
       _requestPermissionsAndStartScanning();
+      _setupPendingSyncListener();
       _updateTime();
       _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
+    });
+  }
+
+  void _setupPendingSyncListener() {
+    _pendingSyncSubscription = _syncService.onPendingSyncReceived.listen((
+      sync,
+    ) {
+      debugPrint('📥 Received pending sync: ${sync.aid}');
+      if (sync.isRemove) {
+        // Remove from pending transactions (after Tap Out)
+        setState(() {
+          _pendingTransactions.remove(sync.aid);
+        });
+        _savePendingTransactions();
+        debugPrint('🗑️ Removed pending transaction for ${sync.aid}');
+      } else {
+        // Add to pending transactions (after Tap In from another device)
+        final pending = PendingTransaction(
+          aid: sync.aid,
+          tapInTime: sync.tapInTime,
+          tapInLoc: TransactionLocation(lat: sync.tapInLat, lng: sync.tapInLng),
+        );
+        setState(() {
+          _pendingTransactions[sync.aid] = pending;
+        });
+        _savePendingTransactions();
+        debugPrint('✅ Added pending transaction for ${sync.aid}');
+      }
     });
   }
 
@@ -145,6 +181,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
+    _pendingSyncSubscription?.cancel();
     _stopBackgroundScanning();
     super.dispose();
   }
@@ -441,6 +478,20 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       _pendingTransactions[qrData.aid] = pending;
     });
     await _savePendingTransactions();
+
+    // Broadcast to other devices via WiFi Sync
+    if (_syncService.isRunning) {
+      final pendingSync = PendingTransactionSync(
+        aid: qrData.aid,
+        tapInTime: pending.tapInTime,
+        tapInLat: pending.tapInLoc.lat,
+        tapInLng: pending.tapInLoc.lng,
+        isRemove: false,
+      );
+      await _syncService.sendPendingSync(pendingSync);
+      debugPrint('📤 Broadcasted Tap In for ${qrData.aid}');
+    }
+
     _showResultDialog(
       'อนุสาวรีย์ชัยฯ',
       'บันทึกจุดขึ้นรถแล้ว',
@@ -452,6 +503,17 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   }
 
   Future<void> _handleTapOut(QrData qrData) async {
+    // Check internet connectivity before Tap Out
+    final hasInternet = await _checkInternetConnection();
+    if (!hasInternet) {
+      _showResultDialog(
+        'ไม่มีสัญญาณอินเทอร์เน็ต',
+        'กรุณาเชื่อมต่ออินเทอร์เน็ตก่อนลงรถ',
+        isSuccess: false,
+      );
+      return;
+    }
+
     final pending = _pendingTransactions[qrData.aid]!;
     final tapOutTime = DateTime.now().toUtc();
     final tapOutLoc = TransactionLocation(lat: 0.0, lng: 0.0);
@@ -475,6 +537,18 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     await _submitTransaction(payload, qrData.aid);
   }
 
+  /// Check if device has internet connection
+  Future<bool> _checkInternetConnection() async {
+    try {
+      final result = await InternetAddress.lookup(
+        'google.com',
+      ).timeout(const Duration(seconds: 3));
+      return result.isNotEmpty && result[0].rawAddress.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> _submitTransaction(
     TransactionRequest payload,
     String aid,
@@ -494,6 +568,19 @@ class _WelcomeScreenState extends State<WelcomeScreen>
           _pendingTransactions.remove(aid);
         });
         _savePendingTransactions();
+
+        // Broadcast removal to other devices via WiFi Sync
+        if (_syncService.isRunning) {
+          final pendingSync = PendingTransactionSync(
+            aid: aid,
+            tapInTime: DateTime.now()
+                .toUtc(), // Time doesn't matter for removal
+            isRemove: true,
+          );
+          await _syncService.sendPendingSync(pendingSync);
+          debugPrint('📤 Broadcasted Tap Out removal for $aid');
+        }
+
         _showResultDialog(
           'สยามพารากอน',
           'ขอบคุณที่ใช้บริการ',
@@ -739,6 +826,43 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                             const SizedBox(width: 16),
                             _buildStatusIcon(Icons.credit_card, true),
                           ],
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      // WiFi Sync Button
+                      GestureDetector(
+                        onTap: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => const WifiSyncScreen(),
+                            ),
+                          );
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.deepPurple.withOpacity(0.8),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: Colors.white54),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: const [
+                              Icon(Icons.wifi, color: Colors.white, size: 20),
+                              SizedBox(width: 6),
+                              Text(
+                                'Sync',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ],
