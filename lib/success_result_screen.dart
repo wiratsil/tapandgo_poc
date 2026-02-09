@@ -34,7 +34,7 @@ class _SuccessResultScreenState extends State<SuccessResultScreen> {
   @override
   void initState() {
     super.initState();
-    _timer = Timer(const Duration(seconds: 5), () {
+    _timer = Timer(const Duration(seconds: 1), () {
       if (mounted) {
         widget.onDismiss(context);
       }

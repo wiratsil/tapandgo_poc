@@ -43,7 +43,7 @@ dependencies:
   uuid: ^4.2.0
   shared_preferences: ^2.2.0
   wakelock_plus: ^1.4.0
-  mobile_scanner: ^7.1.4
+  permission_handler: ^11.3.1
 
 
 

@@ -25,7 +25,7 @@ class _ErrorResultScreenState extends State<ErrorResultScreen> {
   void initState() {
     super.initState();
     // Auto-dismiss after 5 seconds same as success screen
-    _timer = Timer(const Duration(seconds: 5), () {
+    _timer = Timer(const Duration(seconds: 1), () {
       if (mounted) {
         widget.onDismiss(context);
       }

@@ -6,12 +6,12 @@ import 'package:cpay_sdk_plugin/cpay_sdk_plugin.dart';
 import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'models/transaction_model.dart';
 import 'success_result_screen.dart';
 import 'error_result_screen.dart';
 
 import 'package:wakelock_plus/wakelock_plus.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -42,16 +42,9 @@ class WelcomeScreen extends StatefulWidget {
   State<WelcomeScreen> createState() => _WelcomeScreenState();
 }
 
-class _WelcomeScreenState extends State<WelcomeScreen> {
+class _WelcomeScreenState extends State<WelcomeScreen>
+    with WidgetsBindingObserver {
   final _cpaySdkPlugin = CpaySdkPlugin();
-
-  // MobileScanner
-  final MobileScannerController _scannerController = MobileScannerController(
-    detectionSpeed:
-        DetectionSpeed.normal, // Changed to normal to ensure triggers
-    facing: CameraFacing.front,
-    formats: [BarcodeFormat.qrCode],
-  );
 
   // Transaction State
   final Map<String, PendingTransaction> _pendingTransactions = {};
@@ -60,12 +53,15 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
   bool _isProcessing = false;
   bool _isLoading = false;
 
-  String _plateNumber = '12-3456'; // Default License Plate
+  // Background Scanning State
+  bool _isBackgroundScanningActive = false;
+  StreamSubscription<String>? _qrSubscription;
+  StreamSubscription<bool>? _nfcSubscription;
 
+  String _plateNumber = '12-3456';
   String _timeString = '00:00';
   Timer? _timer;
 
-  // Loading UI Helper (Matches MyHomePage style)
   Widget _buildLoadingUI() {
     return Container(
       width: double.infinity,
@@ -73,7 +69,6 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          // Bus Icon
           Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
@@ -87,27 +82,24 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
             ),
           ),
           const SizedBox(height: 24),
-          // BMTA Text
           const Text(
             'ขสมก. BMTA',
             style: TextStyle(
-              color: Color(0xFF0D47A1), // Dark Blue
+              color: Color(0xFF0D47A1),
               fontSize: 28,
               fontWeight: FontWeight.bold,
             ),
           ),
           const SizedBox(height: 16),
-          // System Starting / Processing Text
           const Text(
             'กำลังประมวลผล...',
             style: TextStyle(
-              color: Color(0xFF64B5F6), // Lighter Blue
+              color: Color(0xFF64B5F6),
               fontSize: 18,
               fontWeight: FontWeight.w500,
             ),
           ),
           const SizedBox(height: 40),
-          // Loader
           const SizedBox(
             width: 40,
             height: 40,
@@ -124,16 +116,236 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _loadPlateNumber(); // Load Saved Plate Number
+      _loadPlateNumber();
       _loadPendingTransactions();
-      _startNfcPolling();
-      // _scannerController.start(); // REMOVED: Managed by MobileScanner widget to prevent double-start error
-      _updateTime(); // Update time immediately
+      _requestPermissionsAndStartScanning();
+      _updateTime();
       _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
     });
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    debugPrint('App Lifecycle State: $state');
+
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _stopBackgroundScanning();
+    } else if (state == AppLifecycleState.resumed) {
+      // Only start if not already active
+      if (!_isBackgroundScanningActive) {
+        _startBackgroundScanning();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _timer?.cancel();
+    _stopBackgroundScanning();
+    super.dispose();
+  }
+
+  // ============ Permission Handling ============
+  Future<void> _requestPermissionsAndStartScanning() async {
+    // Stop any existing sessions first to prevent camera conflicts
+    debugPrint('Cleaning up any existing sessions...');
+    try {
+      await _cpaySdkPlugin.stopQrScan();
+      await _cpaySdkPlugin.stopNfcPolling();
+    } catch (e) {
+      debugPrint('Cleanup error (can be ignored): $e');
+    }
+
+    // Small delay to ensure resources are released
+    await Future.delayed(const Duration(milliseconds: 300));
+
+    // Request camera permission
+    final cameraStatus = await Permission.camera.request();
+    debugPrint('Camera permission status: $cameraStatus');
+
+    if (cameraStatus.isGranted) {
+      await _startBackgroundScanning();
+    } else if (cameraStatus.isPermanentlyDenied) {
+      // Show dialog to open settings
+      if (mounted) {
+        _showPermissionDeniedDialog();
+      }
+    } else {
+      // Permission denied but not permanently - start NFC only
+      debugPrint('Camera permission denied, starting NFC only');
+      await _startNfcPollingOnly();
+    }
+  }
+
+  void _showPermissionDeniedDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('ต้องการ Permission กล้อง'),
+        content: const Text(
+          'แอปต้องการ Permission กล้องเพื่อสแกน QR Code กรุณาไปที่ Settings เพื่อเปิด Permission',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('ภายหลัง'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              openAppSettings();
+            },
+            child: const Text('ไปที่ Settings'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ============ Background Scanning ============
+  Future<void> _startBackgroundScanning() async {
+    if (_isBackgroundScanningActive) {
+      debugPrint('Background scanning already active, skipping...');
+      return;
+    }
+
+    debugPrint('Starting background scanning...');
+    _isBackgroundScanningActive = true;
+
+    // Start Background QR Scan with retry logic
+    await _startQrScanWithRetry();
+
+    // Start Background NFC Polling
+    await _startNfcPollingOnly();
+  }
+
+  Future<void> _startQrScanWithRetry({int retries = 3}) async {
+    for (int attempt = 1; attempt <= retries; attempt++) {
+      try {
+        // Wait a bit before starting to ensure camera resources are released
+        if (attempt > 1) {
+          debugPrint('QR Scan retry attempt $attempt/$retries...');
+          await Future.delayed(Duration(milliseconds: 500 * attempt));
+        }
+
+        final qrStarted = await _cpaySdkPlugin.startQrScan(isFrontCamera: true);
+        debugPrint('QR Scan started: $qrStarted');
+
+        _qrSubscription?.cancel();
+        _qrSubscription = _cpaySdkPlugin.onQrCodeDetected.listen((qrCode) {
+          debugPrint('QR Code Detected: $qrCode');
+          _handleQrDetected(qrCode);
+        });
+
+        return; // Success, exit retry loop
+      } catch (e) {
+        debugPrint('Failed to start QR scan (attempt $attempt): $e');
+        if (attempt == retries) {
+          debugPrint('All QR scan retries failed, continuing with NFC only');
+        }
+      }
+    }
+  }
+
+  Future<void> _startNfcPollingOnly() async {
+    try {
+      final nfcStarted = await _cpaySdkPlugin.startNfcPolling(intervalMs: 500);
+      debugPrint('NFC Polling started: $nfcStarted');
+
+      _nfcSubscription?.cancel();
+      _nfcSubscription = _cpaySdkPlugin.onNfcCardDetected.listen((cardPresent) {
+        if (cardPresent) {
+          debugPrint('NFC Card Detected!');
+          _handleNfcDetected();
+        }
+      });
+    } catch (e) {
+      debugPrint('Failed to start NFC polling: $e');
+    }
+  }
+
+  Future<void> _stopBackgroundScanning() async {
+    if (!_isBackgroundScanningActive) return;
+
+    debugPrint('Stopping background scanning...');
+    _isBackgroundScanningActive = false;
+
+    await _qrSubscription?.cancel();
+    _qrSubscription = null;
+
+    await _nfcSubscription?.cancel();
+    _nfcSubscription = null;
+
+    try {
+      await _cpaySdkPlugin.stopQrScan();
+      await _cpaySdkPlugin.stopNfcPolling();
+    } catch (e) {
+      debugPrint('Error stopping background scanning: $e');
+    }
+  }
+
+  // ============ Event Handlers ============
+  Future<void> _handleQrDetected(String qrCode) async {
+    if (_isProcessing || _isLoading) return;
+
+    _isProcessing = true;
+
+    try {
+      await _cpaySdkPlugin.beep();
+    } catch (e) {
+      debugPrint('Beep Error: $e');
+    }
+
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+      });
+    }
+
+    await _processQrString(qrCode);
+  }
+
+  Future<void> _handleNfcDetected() async {
+    if (_isProcessing || _isLoading) return;
+
+    _isProcessing = true;
+
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+      });
+    }
+
+    String cardId;
+    try {
+      final emvData = await _cpaySdkPlugin.readCardEmv().timeout(
+        const Duration(milliseconds: 500),
+        onTimeout: () => null,
+      );
+      if (emvData != null && emvData.isNotEmpty) {
+        cardId = 'CARD-${emvData.hashCode}';
+      } else {
+        cardId = 'TEST-CARD-1234';
+      }
+    } catch (e) {
+      debugPrint('Read EMV Failed: $e');
+      cardId = 'TEST-CARD-1234';
+    }
+
+    final nfcData = QrData(aid: cardId, bal: 100.00);
+
+    if (_pendingTransactions.containsKey(nfcData.aid)) {
+      await _handleTapOut(nfcData);
+    } else {
+      _handleTapIn(nfcData);
+    }
+  }
+
+  // ============ Shared Logic ============
   Future<void> _loadPlateNumber() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -150,7 +362,6 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
 
   void _updateTime() {
     final now = DateTime.now();
-    // Manual formatting to avoid intl dependency if not present
     final hour = now.hour.toString().padLeft(2, '0');
     final minute = now.minute.toString().padLeft(2, '0');
     if (mounted) {
@@ -158,14 +369,6 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         _timeString = '$hour:$minute';
       });
     }
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    _isProcessing = true; // Stop polling
-    _scannerController.dispose();
-    super.dispose();
   }
 
   Future<void> _loadPendingTransactions() async {
@@ -199,108 +402,13 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     }
   }
 
-  Future<void> _startNfcPolling() async {
-    while (mounted && !_isProcessing) {
-      try {
-        await _checkNfcOnce();
-      } catch (e) {
-        debugPrint('NFC Poll Error: $e');
-      }
-      await Future.delayed(const Duration(milliseconds: 500));
-    }
-  }
-
-  Future<void> _checkNfcOnce() async {
-    if (_isProcessing) return;
-    try {
-      final isPresent = await _cpaySdkPlugin.isRfCardPresent();
-
-      if (isPresent == true) {
-        _isProcessing = true;
-        // debugPrint('RF Card Detected!');
-        // await _cpaySdkPlugin.beep(); // Commented out to prevent double beep
-
-        // IMMEDIATE LOADING STATE
-        if (mounted) {
-          setState(() {
-            _isLoading = true;
-          });
-        }
-
-        // Try to get actual Card ID
-        String cardId;
-        try {
-          final emvData = await _cpaySdkPlugin.readCardEmv().timeout(
-            const Duration(milliseconds: 500),
-            onTimeout: () => null,
-          );
-          if (emvData != null && emvData.isNotEmpty) {
-            // If returns JSON or raw data, use hash or data as ID
-            cardId = 'CARD-${emvData.hashCode}';
-          } else {
-            // Fallback to Fixed ID if read fails or returns null
-            cardId = 'TEST-CARD-1234';
-          }
-        } catch (e) {
-          debugPrint('Read EMV Failed: $e');
-          cardId = 'TEST-CARD-1234';
-        }
-
-        final nfcData = QrData(aid: cardId, bal: 100.00);
-
-        if (_pendingTransactions.containsKey(nfcData.aid)) {
-          await _handleTapOut(nfcData);
-        } else {
-          _handleTapIn(nfcData);
-        }
-      }
-    } catch (e) {
-      debugPrint('Check NFC Error: $e');
-      _isProcessing = false; // Reset if error occurred early
-      if (mounted) {
-        setState(() {
-          _isLoading = false; // Reset loading
-        });
-      }
-    }
-  }
-
-  // Detect QR Code from MobileScanner
-  void _onQrDetect(BarcodeCapture capture) async {
-    if (_isProcessing) return;
-
-    final List<Barcode> barcodes = capture.barcodes;
-    if (barcodes.isNotEmpty) {
-      final code = barcodes.first.rawValue;
-      if (code != null) {
-        debugPrint('QR Scanned Raw: $code'); // Debug Log
-        _isProcessing = true;
-
-        try {
-          await _cpaySdkPlugin.beep();
-        } catch (e) {
-          debugPrint('Beep Error: $e');
-        }
-
-        if (mounted) {
-          setState(() {
-            _isLoading = true;
-          });
-        }
-        await _processQrString(code);
-      }
-    }
-  }
-
   Future<void> _processQrString(String rawString) async {
     try {
       QrData qrData;
       try {
-        // Try strict JSON parsing first
         final Map<String, dynamic> data = jsonDecode(rawString);
         qrData = QrData.fromJson(data);
       } catch (_) {
-        // Fallback: Use the raw string as the ID
         debugPrint('QR is not JSON, using raw string as ID');
         qrData = QrData(aid: rawString, bal: 0.0);
       }
@@ -321,12 +429,12 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     }
   }
 
-  // Reuse existing logic for Tap In
+  // ============ Tap In / Tap Out Logic ============
   Future<void> _handleTapIn(QrData qrData) async {
     final pending = PendingTransaction(
       aid: qrData.aid,
       tapInTime: DateTime.now().toUtc(),
-      tapInLoc: TransactionLocation(lat: 0.0, lng: 0.0), // Mock
+      tapInLoc: TransactionLocation(lat: 0.0, lng: 0.0),
     );
 
     setState(() {
@@ -334,16 +442,15 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     });
     await _savePendingTransactions();
     _showResultDialog(
-      'อนุสาวรีย์ชัยฯ', // Location
-      'บันทึกจุดขึ้นรถแล้ว', // Main Message
+      'อนุสาวรีย์ชัยฯ',
+      'บันทึกจุดขึ้นรถแล้ว',
       isSuccess: true,
-      price: null, // Hide price
+      price: null,
       topStatus: 'เริ่มต้นเดินทาง',
       instruction: 'กรุณาแตะบัตรอีกครั้งเมื่อลงรถ',
     );
   }
 
-  // Reuse existing logic for Tap Out
   Future<void> _handleTapOut(QrData qrData) async {
     final pending = _pendingTransactions[qrData.aid]!;
     final tapOutTime = DateTime.now().toUtc();
@@ -353,15 +460,15 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
       txnId: _uuid.v4(),
       assetId: qrData.aid,
       assetType: 'QR',
-      tapInTime: pending.tapInTime.toUtc().toIso8601String(), // Ensure UTC
+      tapInTime: pending.tapInTime.toUtc().toIso8601String(),
       tapInLoc: pending.tapInLoc,
-      tapOutTime: tapOutTime.toUtc().toIso8601String(), // Ensure UTC
+      tapOutTime: tapOutTime.toUtc().toIso8601String(),
       tapOutLoc: tapOutLoc,
     );
 
     final payload = TransactionRequest(
       deviceId: 'ANDROID_POS_01',
-      plateNo: _plateNumber, // Use dynamic plate number
+      plateNo: _plateNumber,
       transactions: [txnItem],
     );
 
@@ -388,12 +495,12 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         });
         _savePendingTransactions();
         _showResultDialog(
-          'สยามพารากอน', // Location (Drop-off)
-          'ขอบคุณที่ใช้บริการ', // Main Message
+          'สยามพารากอน',
+          'ขอบคุณที่ใช้บริการ',
           isSuccess: true,
           isTapOut: true,
-          price: '25.00 ฿', // Fare
-          balance: '475.00 ฿', // Balance
+          price: '25.00 ฿',
+          balance: '475.00 ฿',
           topStatus: 'ชำระเงินสำเร็จ',
           instruction: 'เดินทางปลอดภัย',
         );
@@ -421,22 +528,18 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
   }) {
     if (!mounted) return;
 
-    // Resume polling after dialog is dismissed if needed,
-    // but typically we navigate back to Welcome (which is this screen)
-    // effectively resetting the state or just dismissing the dialog.
-    // For this flow, we push the ResultScreen.
+    _stopBackgroundScanning();
 
     if (isSuccess) {
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
           builder: (context) => SuccessResultScreen(
             onDismiss: (ctx) {
-              // When dismissed, go back to WelcomeScreen (reload it to restart polling)
               Navigator.of(ctx).pushReplacement(
                 MaterialPageRoute(builder: (_) => const WelcomeScreen()),
               );
             },
-            title: title, // This is location name
+            title: title,
             message: message,
             price: price ?? (isTapOut ? '25.00 ฿' : null),
             balance: balance,
@@ -462,6 +565,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     }
   }
 
+  // ============ UI Build ============
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
@@ -469,234 +573,182 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     }
 
     return Scaffold(
-      body: Stack(
-        children: [
-          // Layer 1: Scanner Logic/View (Background)
-          // Use SizedBox.expand to fill the screen
-          SizedBox.expand(
-            child: MobileScanner(
-              controller: _scannerController,
-              onDetect: _onQrDetect,
-              fit: BoxFit.cover,
-            ),
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [const Color(0xFF1B5E20), const Color(0xFF0D47A1)],
           ),
-
-          // Layer 2: Overlay UI (Semi-Transparent Tint)
-          Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  const Color(
-                    0xFF1B5E20,
-                  ).withOpacity(0.5), // Dark Green with 30% opacity
-                  const Color(
-                    0xFF0D47A1,
-                  ).withOpacity(0.5), // Dark Blue with 30% opacity
-                ],
-              ),
-            ),
-          ),
-
-          // Debug/Reset Button (Top Right hidden area)
-          Positioned(
-            top: 40,
-            right: 16,
-            child: GestureDetector(
-              onLongPress: () {
-                // Secret reset
-                setState(() {
-                  _isProcessing = false;
-                  _isLoading = false;
-                });
-                _scannerController.start();
-                ScaffoldMessenger.of(
-                  context,
-                ).showSnackBar(const SnackBar(content: Text('Scanner Reset')));
-              },
-              child: Container(
-                color: Colors.transparent,
-                width: 40,
-                height: 40,
-              ),
-            ),
-          ),
-
-          // Layer 3: Main Content (Same as before)
-          SafeArea(
-            child: SizedBox(
-              width: double.infinity,
-              child: Column(
-                children: [
-                  // 1. Top Status Bar
-                  Container(
-                    width: double.infinity,
-                    color: Colors.black.withOpacity(0.2), // Slight contrast
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16.0,
-                      vertical: 8.0,
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        // Left: BMTA | Time
-                        Text(
-                          'ขสมก. BMTA  |  $_timeString',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
+        ),
+        child: SafeArea(
+          child: SizedBox(
+            width: double.infinity,
+            child: Column(
+              children: [
+                // Top Status Bar
+                Container(
+                  width: double.infinity,
+                  color: Colors.black.withOpacity(0.2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16.0,
+                    vertical: 8.0,
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'ขสมก. BMTA  |  $_timeString',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
                         ),
-                        // Right: Signal
-                        Row(
-                          children: const [
-                            Text(
-                              'สัญญาณปกติ',
-                              style: TextStyle(
-                                color: Colors.greenAccent, // Green for 'Normal'
-                                fontSize: 14,
-                              ),
-                            ),
-                            SizedBox(width: 8),
-                            Icon(
-                              Icons.signal_cellular_4_bar,
+                      ),
+                      Row(
+                        children: const [
+                          Text(
+                            'สัญญาณปกติ',
+                            style: TextStyle(
                               color: Colors.greenAccent,
-                              size: 20,
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  // 2. Location Bar
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                      vertical: 8,
-                      horizontal: 16,
-                    ),
-                    color: Colors.black.withOpacity(0.1),
-                    child: Row(
-                      children: const [
-                        Icon(
-                          Icons.location_on,
-                          color: Colors.pinkAccent,
-                          size: 20,
-                        ),
-                        SizedBox(width: 8),
-                        Text(
-                          'สถานีปัจจุบัน: อนุสาวรีย์ชัยฯ',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  const Spacer(),
-
-                  // Center Content
-                  const Icon(
-                    Icons.credit_card,
-                    size: 100,
-                    color: Colors.lightBlueAccent,
-                  ),
-                  const SizedBox(height: 24),
-                  const Text(
-                    'กรุณาแตะบัตร', // Updated Text
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 32,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  const Text(
-                    'รองรับบัตรเครดิต', // Updated Sub-text
-                    style: TextStyle(color: Colors.white70, fontSize: 18),
-                  ),
-
-                  const SizedBox(height: 20),
-                  const Spacer(),
-
-                  // Bottom Status Indicators
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 16.0),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        // License Plate Editor
-                        GestureDetector(
-                          onTap: _showEditPlateDialog,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 8,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.3),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(color: Colors.white54),
-                            ),
-                            child: Row(
-                              children: [
-                                const Icon(
-                                  Icons.directions_bus,
-                                  color: Colors.white,
-                                  size: 20,
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  _plateNumber,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                const Icon(
-                                  Icons.edit,
-                                  color: Colors.white70,
-                                  size: 16,
-                                ),
-                              ],
+                              fontSize: 14,
                             ),
                           ),
-                        ),
-                        const SizedBox(width: 16),
+                          SizedBox(width: 8),
+                          Icon(
+                            Icons.signal_cellular_4_bar,
+                            color: Colors.greenAccent,
+                            size: 20,
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
 
-                        // Existing Status Icons
-                        Container(
-                          padding: const EdgeInsets.all(8),
+                // Location Bar
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 8,
+                    horizontal: 16,
+                  ),
+                  color: Colors.black.withOpacity(0.1),
+                  child: Row(
+                    children: const [
+                      Icon(
+                        Icons.location_on,
+                        color: Colors.pinkAccent,
+                        size: 20,
+                      ),
+                      SizedBox(width: 8),
+                      Text(
+                        'สถานีปัจจุบัน: อนุสาวรีย์ชัยฯ',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                const Spacer(),
+
+                // Center Content
+                const Icon(
+                  Icons.credit_card,
+                  size: 100,
+                  color: Colors.lightBlueAccent,
+                ),
+                const SizedBox(height: 24),
+                const Text(
+                  'กรุณาแตะบัตร',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'รองรับบัตรเครดิต และ QR Code',
+                  style: TextStyle(color: Colors.white70, fontSize: 18),
+                ),
+
+                const SizedBox(height: 20),
+                const Spacer(),
+
+                // Bottom Status Indicators
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16.0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      GestureDetector(
+                        onTap: _showEditPlateDialog,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
                           decoration: BoxDecoration(
                             color: Colors.black.withOpacity(0.3),
                             borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: Colors.white54),
                           ),
                           child: Row(
-                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              _buildStatusIcon(Icons.camera_alt, true),
-                              const SizedBox(width: 16),
-                              _buildStatusIcon(Icons.credit_card, true),
+                              const Icon(
+                                Icons.directions_bus,
+                                color: Colors.white,
+                                size: 20,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                _plateNumber,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              const Icon(
+                                Icons.edit,
+                                color: Colors.white70,
+                                size: 16,
+                              ),
                             ],
                           ),
                         ),
-                      ],
-                    ),
+                      ),
+                      const SizedBox(width: 16),
+
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.3),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _buildStatusIcon(Icons.qr_code_scanner, true),
+                            const SizedBox(width: 16),
+                            _buildStatusIcon(Icons.credit_card, true),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 10),
-                ],
-              ),
+                ),
+                const SizedBox(height: 10),
+              ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -748,7 +800,6 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                   setState(() {
                     _plateNumber = controller.text;
                   });
-                  // Save to SharedPreferences
                   final prefs = await SharedPreferences.getInstance();
                   await prefs.setString('plate_number', _plateNumber);
                 }
