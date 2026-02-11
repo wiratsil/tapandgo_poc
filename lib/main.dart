@@ -136,6 +136,11 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   }
 
   void _setupPendingSyncListener() {
+    // Listen for status changes to update UI (WiFi icon)
+    _syncService.onStatusChanged.listen((_) {
+      if (mounted) setState(() {});
+    });
+
     _pendingSyncSubscription = _syncService.onPendingSyncReceived.listen((
       sync,
     ) {
@@ -684,18 +689,54 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                     vertical: 8.0,
                   ),
                   child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(
-                        'ขสมก. BMTA  |  $_timeString',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              'ขสมก. BMTA',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            Text(
+                              _timeString,
+                              style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                       Row(
-                        children: const [
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (_syncService.isRunning) ...[
+                            Text(
+                              _syncService.currentRole == SyncRole.host
+                                  ? 'Host'
+                                  : 'Client',
+                              style: TextStyle(
+                                color: Colors.greenAccent,
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            SizedBox(width: 4),
+                            Icon(
+                              Icons.wifi,
+                              color: Colors.greenAccent,
+                              size: 20,
+                            ),
+                            SizedBox(width: 16),
+                          ],
                           Text(
                             'สัญญาณปกติ',
                             style: TextStyle(
