@@ -811,8 +811,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
                     // Center Content - QR Preview
                     Container(
-                      width: 280,
-                      height: 280,
+                      width: 200,
+                      height: 200,
                       decoration: BoxDecoration(
                         color: Colors.black,
                         borderRadius: BorderRadius.circular(20),
