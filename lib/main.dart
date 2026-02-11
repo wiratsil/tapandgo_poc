@@ -128,6 +128,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       _loadPlateNumber();
       _loadPendingTransactions();
       _requestPermissionsAndStartScanning();
+      _requestPermissionsAndStartScanning();
       _setupPendingSyncListener();
       _updateTime();
       _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
@@ -179,6 +180,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
     _pendingSyncSubscription?.cancel();
@@ -722,7 +724,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                   ),
                   color: Colors.black.withOpacity(0.1),
                   child: Row(
-                    children: const [
+                    children: [
                       Icon(
                         Icons.location_on,
                         color: Colors.pinkAccent,

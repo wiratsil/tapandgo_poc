@@ -166,6 +166,21 @@ class WifiSyncService {
       StreamController<int>.broadcast();
   Stream<int> get onClientCountChanged => _clientCountController.stream;
 
+  // Door Location State
+  String _doorLocation = 'ประตู 2';
+  String get doorLocation => _doorLocation;
+
+  final StreamController<String> _doorLocationController =
+      StreamController<String>.broadcast();
+  Stream<String> get onDoorLocationChanged => _doorLocationController.stream;
+
+  void setDoorLocation(String location) {
+    _doorLocation = location;
+    if (!_doorLocationController.isClosed) {
+      _doorLocationController.add(location);
+    }
+  }
+
   // Debug Helper
   Future<List<String>> getInternalIps() async {
     final ips = <String>[];

@@ -21,7 +21,7 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
     text: WifiSyncService.defaultHostIp,
   );
   final TextEditingController _doorLocationController = TextEditingController(
-    text: 'ประตู 2',
+    text: 'ประตู 2', // Default value, will be updated from service
   );
   final Uuid _uuid = const Uuid();
 
@@ -47,6 +47,14 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
     super.initState();
     _getLocalIp();
     _setupListeners();
+    // Initialize with current service value
+    _doorLocationController.text = _syncService.doorLocation;
+
+    // Add listener to update service when text changes
+    _doorLocationController.addListener(() {
+      _syncService.setDoorLocation(_doorLocationController.text);
+    });
+
     // Restore state from singleton if service is already running
     _restoreStateFromService();
   }
@@ -207,6 +215,10 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
         } else if (specificIp != null) {
           _status = 'Host started on $specificIp';
         }
+
+        // Auto-set door location for Host
+        _doorLocationController.text = 'ประตู Host';
+        _syncService.setDoorLocation('ประตู Host');
       });
     } else {
       setState(() {
@@ -247,6 +259,10 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
     if (success) {
       setState(() {
         _selectedRole = SyncRole.client;
+
+        // Auto-set door location for Client
+        _doorLocationController.text = 'ประตู Client';
+        _syncService.setDoorLocation('ประตู Client');
       });
     } else {
       _showSnackBar('ไม่สามารถเชื่อมต่อได้');
