@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
+import 'dart:io';
 import 'package:network_info_plus/network_info_plus.dart';
 import 'package:uuid/uuid.dart';
 import 'services/wifi_sync_service.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 /// WiFi Sync Screen - Allows selecting role (Host/Client) and syncing scan data
 class WifiSyncScreen extends StatefulWidget {
@@ -61,11 +64,45 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
 
   Future<void> _getLocalIp() async {
     try {
+      // Android requires location permission to get WiFi info
+      if (Platform.isAndroid) {
+        var status = await Permission.location.status;
+        if (!status.isGranted) {
+          status = await Permission.location.request();
+        }
+
+        if (!status.isGranted) {
+          debugPrint('Location permission denied, cannot get WiFi IP');
+          // Show snackbar
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('ต้องการ Location Permission เพื่อเริ่ม Host'),
+              ),
+            );
+          }
+          return;
+        }
+      }
+
       final info = NetworkInfo();
-      final ip = await info.getWifiIP();
+      var ip = await info.getWifiIP();
+
+      // If IP is null, it might be because we are the Hotspot provider
+      // Hotspot provider IP is usually 192.168.43.1 on Android
+      if (ip == null && Platform.isAndroid) {
+        // We can't easily detect if we are hotspot, but we can guess
+        // checking network interfaces is another way but complex
+        debugPrint('IP is null, might be Hotspot');
+      }
+
       if (mounted) {
         setState(() {
           _localIp = ip;
+          // If we couldn't get IP, suggest the default hotspot IP
+          if (_localIp == null) {
+            _status = 'ไม่พบ IP (ถ้าเปิด Hotspot อยู่ IP คือ 192.168.43.1)';
+          }
         });
       }
     } catch (e) {
@@ -154,16 +191,44 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
     });
   }
 
-  Future<void> _startAsHost() async {
+  Future<void> _startAsHost({String? specificIp}) async {
     setState(() {
       _status = 'กำลังเริ่ม Host...';
     });
 
-    final success = await _syncService.startAsHost();
+    final success = await _syncService.startAsHost(bindIp: specificIp);
     if (success) {
       setState(() {
         _selectedRole = SyncRole.host;
+        // If local IP is null (common in Hotspot), explicitly show the default hotspot IP
+        if (_localIp == null && specificIp == null) {
+          _status =
+              'Host started (Hotspot IP: ${WifiSyncService.defaultHostIp})';
+        } else if (specificIp != null) {
+          _status = 'Host started on $specificIp';
+        }
       });
+    } else {
+      setState(() {
+        _status = 'ไม่สามารถเริ่ม Host ได้';
+      });
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Error'),
+            content: const Text(
+              'ไม่สามารถเปิด Host ได้\n1. ตรวจสอบว่าเปิด WiFi/Hotspot แล้ว\n2. ลองปิด-เปิดแอปใหม่',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('ตกลง'),
+              ),
+            ],
+          ),
+        );
+      }
     }
   }
 
@@ -386,7 +451,17 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
             onTap: _startAsHost,
           ),
 
-          const SizedBox(height: 16),
+          // Host Debug Button
+          TextButton.icon(
+            onPressed: _showNetworkDebugDialog,
+            icon: const Icon(Icons.bug_report, size: 16, color: Colors.grey),
+            label: const Text(
+              'Debug Network (ดู IP ทั้งหมด)',
+              style: TextStyle(color: Colors.grey, fontSize: 12),
+            ),
+          ),
+
+          const SizedBox(height: 8),
 
           // Client Button
           _buildRoleButton(
@@ -454,6 +529,60 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Future<void> _showNetworkDebugDialog() async {
+    final ips = await _syncService.getInternalIps();
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Network Interfaces'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (ips.isEmpty) const Text('No IPv4 interfaces found.'),
+              ...ips.map((ip) {
+                final address = ip.split(': ')[1];
+                return ListTile(
+                  title: Text(address),
+                  subtitle: Text(ip.split(': ')[0]),
+                  leading: const Icon(Icons.network_check),
+                  onTap: () {
+                    Clipboard.setData(ClipboardData(text: address));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Copied to clipboard')),
+                    );
+                  },
+                  trailing: IconButton(
+                    icon: const Icon(Icons.play_arrow, color: Colors.green),
+                    tooltip: 'Start Host on this IP',
+                    onPressed: () {
+                      Navigator.pop(context); // Close dialog
+                      _startAsHost(specificIp: address);
+                    },
+                  ),
+                );
+              }),
+              const Divider(),
+              const Text(
+                'Note: Click Play (▶) to force start Host on a specific IP.',
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
       ),
     );
   }

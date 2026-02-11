@@ -166,6 +166,41 @@ class WifiSyncService {
       StreamController<int>.broadcast();
   Stream<int> get onClientCountChanged => _clientCountController.stream;
 
+  // Debug Helper
+  Future<List<String>> getInternalIps() async {
+    final ips = <String>[];
+    try {
+      final interfaces = await NetworkInterface.list();
+      for (final interface in interfaces) {
+        for (final addr in interface.addresses) {
+          if (addr.type == InternetAddressType.IPv4 && !addr.isLoopback) {
+            ips.add('${interface.name}: ${addr.address}');
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error listing interfaces: $e');
+    }
+    return ips;
+  }
+
+  // Get current WiFi IP
+  Future<String?> _getWifiIp() async {
+    try {
+      final interfaces = await NetworkInterface.list();
+      for (final interface in interfaces) {
+        for (final addr in interface.addresses) {
+          if (addr.type == InternetAddressType.IPv4 && !addr.isLoopback) {
+            return addr.address;
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error getting WiFi IP: $e');
+    }
+    return null;
+  }
+
   // Pending transaction sync
   final StreamController<PendingTransactionSync> _pendingSyncController =
       StreamController<PendingTransactionSync>.broadcast();
@@ -174,37 +209,25 @@ class WifiSyncService {
 
   /// Start as Host (Server) on the specified IP
   Future<bool> startAsHost({
-    String ip = defaultHostIp,
+    String? bindIp,
     int port = defaultPort,
     String deviceName = 'TapAndGo Host',
   }) async {
-    if (_isRunning) {
-      await stop();
-    }
+    if (_isRunning) return true;
 
     try {
-      _port = port;
-      _hostIp = ip;
-
-      // Bind to all interfaces to accept connections
       _serverSocket = await ServerSocket.bind(
-        InternetAddress.anyIPv4,
+        bindIp != null ? InternetAddress(bindIp) : InternetAddress.anyIPv4,
         port,
         shared: true,
       );
 
-      _currentRole = SyncRole.host;
       _isRunning = true;
+      _currentRole = SyncRole.host;
+      _port = port;
+      _hostIp = bindIp ?? (await _getWifiIp()) ?? defaultHostIp;
 
-      if (!_statusController.isClosed) {
-        _statusController.add('Host started on port $port');
-      }
-      debugPrint('🖥️ Server started on port $port');
-
-      // Start heartbeat to keep connections alive
       _startHeartbeat();
-
-      // Start broadcasting for auto-discovery
       _startDiscoveryBroadcast(deviceName);
       _serverSocket!.listen(
         _handleClientConnection,
