@@ -13,6 +13,7 @@ import 'success_result_screen.dart';
 import 'error_result_screen.dart';
 import 'wifi_sync_screen.dart';
 import 'services/wifi_sync_service.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'package:wakelock_plus/wakelock_plus.dart';
 
@@ -58,8 +59,15 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
   // Background Scanning State
   bool _isBackgroundScanningActive = false;
-  StreamSubscription<String>? _qrSubscription;
+
+  StreamSubscription<Object?>? _qrSubscription;
   StreamSubscription<bool>? _nfcSubscription;
+  final MobileScannerController _mobileScannerController =
+      MobileScannerController(
+        detectionSpeed: DetectionSpeed.noDuplicates,
+        facing: CameraFacing.front,
+        formats: [BarcodeFormat.qrCode],
+      );
 
   // WiFi Sync for pending transactions
   final WifiSyncService _syncService = WifiSyncService();
@@ -190,6 +198,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     _timer?.cancel();
     _pendingSyncSubscription?.cancel();
     _stopBackgroundScanning();
+    _mobileScannerController.dispose();
     super.dispose();
   }
 
@@ -198,7 +207,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     // Stop any existing sessions first to prevent camera conflicts
     debugPrint('Cleaning up any existing sessions...');
     try {
-      await _cpaySdkPlugin.stopQrScan();
+      // await _cpaySdkPlugin.stopQrScan(); // Removed cpay QR stop
+      await _mobileScannerController.stop();
       await _cpaySdkPlugin.stopNfcPolling();
     } catch (e) {
       debugPrint('Cleanup error (can be ignored): $e');
@@ -268,30 +278,24 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   }
 
   Future<void> _startQrScanWithRetry({int retries = 3}) async {
-    for (int attempt = 1; attempt <= retries; attempt++) {
-      try {
-        // Wait a bit before starting to ensure camera resources are released
-        if (attempt > 1) {
-          debugPrint('QR Scan retry attempt $attempt/$retries...');
-          await Future.delayed(Duration(milliseconds: 500 * attempt));
+    try {
+      // if (_mobileScannerController.isStarting) return; // Removed invalid property
+
+      await _mobileScannerController.start();
+      debugPrint('Mobile Scanner started');
+
+      _qrSubscription?.cancel();
+      _qrSubscription = _mobileScannerController.barcodes.listen((capture) {
+        for (final barcode in capture.barcodes) {
+          if (barcode.rawValue != null) {
+            debugPrint('QR Code Detected: ${barcode.rawValue}');
+            _handleQrDetected(barcode.rawValue!);
+            break; // Handle only one at a time
+          }
         }
-
-        final qrStarted = await _cpaySdkPlugin.startQrScan(isFrontCamera: true);
-        debugPrint('QR Scan started: $qrStarted');
-
-        _qrSubscription?.cancel();
-        _qrSubscription = _cpaySdkPlugin.onQrCodeDetected.listen((qrCode) {
-          debugPrint('QR Code Detected: $qrCode');
-          _handleQrDetected(qrCode);
-        });
-
-        return; // Success, exit retry loop
-      } catch (e) {
-        debugPrint('Failed to start QR scan (attempt $attempt): $e');
-        if (attempt == retries) {
-          debugPrint('All QR scan retries failed, continuing with NFC only');
-        }
-      }
+      });
+    } catch (e) {
+      debugPrint('Failed to start Mobile Scanner: $e');
     }
   }
 
@@ -325,7 +329,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     _nfcSubscription = null;
 
     try {
-      await _cpaySdkPlugin.stopQrScan();
+      // await _cpaySdkPlugin.stopQrScan(); // Removed cpay QR stop
+      await _mobileScannerController.stop();
       await _cpaySdkPlugin.stopNfcPolling();
     } catch (e) {
       debugPrint('Error stopping background scanning: $e');
@@ -663,259 +668,335 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
-      return Scaffold(backgroundColor: Colors.white, body: _buildLoadingUI());
+      return Scaffold(
+        backgroundColor: Colors.white,
+        body: Stack(
+          children: [
+            // Hidden MobileScanner widget to keep controller active
+            SizedBox(
+              width: 1,
+              height: 1,
+              child: MobileScanner(
+                controller: _mobileScannerController,
+                onDetect: (capture) {}, // Handled by listener
+              ),
+            ),
+            _buildLoadingUI(),
+          ],
+        ),
+      );
     }
 
     return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [const Color(0xFF1B5E20), const Color(0xFF0D47A1)],
-          ),
-        ),
-        child: SafeArea(
-          child: SizedBox(
-            width: double.infinity,
-            child: Column(
-              children: [
-                // Top Status Bar
-                Container(
-                  width: double.infinity,
-                  color: Colors.black.withOpacity(0.2),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16.0,
-                    vertical: 8.0,
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              'ขสมก. BMTA',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            Text(
-                              _timeString,
-                              style: const TextStyle(
-                                color: Colors.white70,
-                                fontSize: 14,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
+      body: Stack(
+        children: [
+          Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [const Color(0xFF1B5E20), const Color(0xFF0D47A1)],
+              ),
+            ),
+            child: SafeArea(
+              child: SizedBox(
+                width: double.infinity,
+                child: Column(
+                  children: [
+                    // Top Status Bar
+                    Container(
+                      width: double.infinity,
+                      color: Colors.black.withOpacity(0.2),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16.0,
+                        vertical: 8.0,
                       ),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
+                      child: Row(
                         children: [
-                          if (_syncService.isRunning) ...[
-                            Text(
-                              _syncService.currentRole == SyncRole.host
-                                  ? 'Host'
-                                  : 'Client',
-                              style: TextStyle(
-                                color: Colors.greenAccent,
-                                fontSize: 14,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            SizedBox(width: 4),
-                            Icon(
-                              Icons.wifi,
-                              color: Colors.greenAccent,
-                              size: 20,
-                            ),
-                            SizedBox(width: 16),
-                          ],
-                          Text(
-                            'สัญญาณปกติ',
-                            style: TextStyle(
-                              color: Colors.greenAccent,
-                              fontSize: 14,
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  'ขสมก. BMTA',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                Text(
+                                  _timeString,
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                          SizedBox(width: 8),
-                          Icon(
-                            Icons.signal_cellular_4_bar,
-                            color: Colors.greenAccent,
-                            size: 20,
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (_syncService.isRunning) ...[
+                                Text(
+                                  _syncService.currentRole == SyncRole.host
+                                      ? 'Host'
+                                      : 'Client',
+                                  style: TextStyle(
+                                    color: Colors.greenAccent,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                SizedBox(width: 4),
+                                Icon(
+                                  Icons.wifi,
+                                  color: Colors.greenAccent,
+                                  size: 20,
+                                ),
+                                SizedBox(width: 16),
+                              ],
+                              Text(
+                                'สัญญาณปกติ',
+                                style: TextStyle(
+                                  color: Colors.greenAccent,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              SizedBox(width: 8),
+                              Icon(
+                                Icons.signal_cellular_4_bar,
+                                color: Colors.greenAccent,
+                                size: 20,
+                              ),
+                            ],
                           ),
                         ],
                       ),
-                    ],
-                  ),
-                ),
+                    ),
 
-                // Location Bar
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 8,
-                    horizontal: 16,
-                  ),
-                  color: Colors.black.withOpacity(0.1),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.location_on,
-                        color: Colors.pinkAccent,
-                        size: 20,
+                    // Location Bar
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 8,
+                        horizontal: 16,
                       ),
-                      SizedBox(width: 8),
-                      Text(
-                        'สถานีปัจจุบัน: อนุสาวรีย์ชัยฯ',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
-                        ),
+                      color: Colors.black.withOpacity(0.1),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.location_on,
+                            color: Colors.pinkAccent,
+                            size: 20,
+                          ),
+                          SizedBox(width: 8),
+                          Text(
+                            'สถานีปัจจุบัน: อนุสาวรีย์ชัยฯ',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
-                ),
+                    ),
 
-                const Spacer(),
+                    const Spacer(),
 
-                // Center Content
-                const Icon(
-                  Icons.credit_card,
-                  size: 100,
-                  color: Colors.lightBlueAccent,
-                ),
-                const SizedBox(height: 24),
-                const Text(
-                  'กรุณาแตะบัตร',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 32,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                const Text(
-                  'รองรับบัตรเครดิต และ QR Code',
-                  style: TextStyle(color: Colors.white70, fontSize: 18),
-                ),
-
-                const SizedBox(height: 20),
-                const Spacer(),
-
-                // Bottom Status Indicators
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 16.0),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      GestureDetector(
-                        onTap: _showEditPlateDialog,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 8,
+                    // Center Content - QR Preview
+                    Container(
+                      width: 280,
+                      height: 280,
+                      decoration: BoxDecoration(
+                        color: Colors.black,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: Colors.white, width: 4),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.5),
+                            blurRadius: 10,
+                            spreadRadius: 2,
                           ),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withOpacity(0.3),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: Colors.white54),
-                          ),
-                          child: Row(
-                            children: [
-                              const Icon(
-                                Icons.directions_bus,
-                                color: Colors.white,
-                                size: 20,
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                _plateNumber,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              const Icon(
-                                Icons.edit,
-                                color: Colors.white70,
-                                size: 16,
-                              ),
-                            ],
-                          ),
-                        ),
+                        ],
                       ),
-                      const SizedBox(width: 16),
-
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.3),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: Stack(
                           children: [
-                            _buildStatusIcon(Icons.qr_code_scanner, true),
-                            const SizedBox(width: 16),
-                            _buildStatusIcon(Icons.credit_card, true),
+                            MobileScanner(
+                              controller: _mobileScannerController,
+                              onDetect: (capture) {}, // Handled by listener
+                              fit: BoxFit.cover,
+
+                              errorBuilder: (context, error, child) {
+                                return Center(
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(
+                                        Icons.error,
+                                        color: Colors.white,
+                                        size: 32,
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        'Error: ${error.errorCode}',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 12,
+                                        ),
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
+                            Center(
+                              child: Icon(
+                                Icons.qr_code_scanner,
+                                size: 100,
+                                color: Colors.white.withOpacity(0.3),
+                              ),
+                            ),
                           ],
                         ),
                       ),
-                      const SizedBox(width: 16),
-                      // WiFi Sync Button
-                      GestureDetector(
-                        onTap: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => const WifiSyncScreen(),
-                            ),
-                          );
-                        },
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.deepPurple.withOpacity(0.8),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: Colors.white54),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: const [
-                              Icon(Icons.wifi, color: Colors.white, size: 20),
-                              SizedBox(width: 6),
-                              Text(
-                                'Sync',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
+                    ),
+                    const SizedBox(height: 24),
+                    const Text(
+                      'กรุณาแตะบัตร',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 32,
+                        fontWeight: FontWeight.bold,
                       ),
-                    ],
-                  ),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'แตะบัตรที่จุดอ่านเพื่อชำระเงิน',
+                      style: TextStyle(color: Colors.white70, fontSize: 18),
+                    ),
+                    const Spacer(),
+
+                    // Bottom Status Indicators
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 16.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          GestureDetector(
+                            onTap: _showEditPlateDialog,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 8,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withOpacity(0.3),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(color: Colors.white54),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.directions_bus,
+                                    color: Colors.white,
+                                    size: 20,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    _plateNumber,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  const Icon(
+                                    Icons.edit,
+                                    color: Colors.white70,
+                                    size: 16,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.3),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                _buildStatusIcon(Icons.qr_code_scanner, true),
+                                const SizedBox(width: 16),
+                                _buildStatusIcon(Icons.credit_card, true),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          // WiFi Sync Button
+                          GestureDetector(
+                            onTap: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => const WifiSyncScreen(),
+                                ),
+                              );
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 8,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.deepPurple.withOpacity(0.8),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(color: Colors.white54),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: const [
+                                  Icon(
+                                    Icons.wifi,
+                                    color: Colors.white,
+                                    size: 20,
+                                  ),
+                                  SizedBox(width: 6),
+                                  Text(
+                                    'Sync',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                  ],
                 ),
-                const SizedBox(height: 10),
-              ],
+              ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
