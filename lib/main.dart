@@ -13,6 +13,7 @@ import 'success_result_screen.dart';
 import 'error_result_screen.dart';
 import 'wifi_sync_screen.dart';
 import 'services/wifi_sync_service.dart';
+import 'services/location_service.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -71,6 +72,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
   // WiFi Sync for pending transactions
   final WifiSyncService _syncService = WifiSyncService();
+  final LocationService _locationService = LocationService();
   StreamSubscription<PendingTransactionSync>? _pendingSyncSubscription;
 
   String _plateNumber = '12-3456';
@@ -135,8 +137,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadPlateNumber();
       _loadPendingTransactions();
-      _requestPermissionsAndStartScanning();
-      _requestPermissionsAndStartScanning();
+      _loadPlateNumber();
+      _loadPendingTransactions();
+      _requestAllPermissions();
       _setupPendingSyncListener();
       _updateTime();
       _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
@@ -203,45 +206,53 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   }
 
   // ============ Permission Handling ============
-  Future<void> _requestPermissionsAndStartScanning() async {
-    // Stop any existing sessions first to prevent camera conflicts
+  // ============ Permission Handling ============
+  Future<void> _requestAllPermissions() async {
+    // Stop any existing sessions first
     debugPrint('Cleaning up any existing sessions...');
     try {
-      // await _cpaySdkPlugin.stopQrScan(); // Removed cpay QR stop
       await _mobileScannerController.stop();
       await _cpaySdkPlugin.stopNfcPolling();
     } catch (e) {
       debugPrint('Cleanup error (can be ignored): $e');
     }
 
-    // Small delay to ensure resources are released
     await Future.delayed(const Duration(milliseconds: 300));
 
-    // Request camera permission
-    final cameraStatus = await Permission.camera.request();
-    debugPrint('Camera permission status: $cameraStatus');
+    // Request all permissions at once
+    final statuses = await [
+      Permission.camera,
+      Permission.location,
+      Permission.storage,
+    ].request();
 
-    if (cameraStatus.isGranted) {
+    debugPrint('Permissions status: $statuses');
+
+    // Handle Camera Logic
+    final cameraStatus = statuses[Permission.camera];
+    if (cameraStatus != null && cameraStatus.isGranted) {
       await _startBackgroundScanning();
-    } else if (cameraStatus.isPermanentlyDenied) {
-      // Show dialog to open settings
-      if (mounted) {
-        _showPermissionDeniedDialog();
-      }
+    } else if (cameraStatus != null && cameraStatus.isPermanentlyDenied) {
+      if (mounted) _showPermissionDeniedDialog('กล้อง');
     } else {
-      // Permission denied but not permanently - start NFC only
-      debugPrint('Camera permission denied, starting NFC only');
+      debugPrint('Camera denied, starting NFC only');
       await _startNfcPollingOnly();
+    }
+
+    // Handle Location Logic (Optional: just log for now as it is used on demand)
+    final locationStatus = statuses[Permission.location];
+    if (locationStatus != null && !locationStatus.isGranted) {
+      debugPrint('Location permission denied');
     }
   }
 
-  void _showPermissionDeniedDialog() {
+  void _showPermissionDeniedDialog(String permissionName) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('ต้องการ Permission กล้อง'),
-        content: const Text(
-          'แอปต้องการ Permission กล้องเพื่อสแกน QR Code กรุณาไปที่ Settings เพื่อเปิด Permission',
+        title: Text('ต้องการ Permission $permissionName'),
+        content: Text(
+          'แอปต้องการ Permission $permissionName เพื่อทำงาน กรุณาไปที่ Settings เพื่อเปิด Permission',
         ),
         actions: [
           TextButton(
@@ -480,10 +491,15 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
   // ============ Tap In / Tap Out Logic ============
   Future<void> _handleTapIn(QrData qrData) async {
+    // Get current location
+    final position = await _locationService.getCurrentPosition();
+    final lat = position?.latitude ?? 0.0;
+    final lng = position?.longitude ?? 0.0;
+
     final pending = PendingTransaction(
       aid: qrData.aid,
       tapInTime: DateTime.now().toUtc(),
-      tapInLoc: TransactionLocation(lat: 0.0, lng: 0.0),
+      tapInLoc: TransactionLocation(lat: lat, lng: lng),
     );
 
     setState(() {
@@ -528,7 +544,13 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
     final pending = _pendingTransactions[qrData.aid]!;
     final tapOutTime = DateTime.now().toUtc();
-    final tapOutLoc = TransactionLocation(lat: 0.0, lng: 0.0);
+
+    // Get current location for Tap Out
+    final position = await _locationService.getCurrentPosition();
+    final tapOutLoc = TransactionLocation(
+      lat: position?.latitude ?? 0.0,
+      lng: position?.longitude ?? 0.0,
+    );
 
     final txnItem = TransactionItem(
       txnId: _uuid.v4(),
