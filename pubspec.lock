@@ -54,7 +54,7 @@ packages:
     description:
       path: "."
       ref: HEAD
-      resolved-ref: "3bb07f692d985c556c97bf54deeec8eab90bb51b"
+      resolved-ref: f7f238aac51e527ea6d5b8fd84590cd54383933c
       url: "https://github.com/wiratsil/cpay_sdk_plugin.git"
     source: git
     version: "0.0.1"

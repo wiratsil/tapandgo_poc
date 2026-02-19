@@ -52,7 +52,7 @@ class RouteDetail {
       seq: json['seq'] ?? 0,
       busstopId: json['busstopId'] ?? 0,
       busstopDesc: json['busstopDesc'] ?? '',
-      isExpress: json['isExpress'] ?? false,
+      isExpress: json['isExpress'] == true || json['isExpress'] == 1,
       afterExpressBusstopId: json['afterExpressBusstopId'],
       latitude: (json['latitude'] as num?)?.toDouble() ?? 0.0,
       longitude: (json['longitude'] as num?)?.toDouble() ?? 0.0,

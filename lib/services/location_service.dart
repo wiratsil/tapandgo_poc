@@ -45,6 +45,7 @@ class LocationService {
       return await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.medium, // Reduce accuracy for speed
         timeLimit: const Duration(seconds: 5),
+        forceAndroidLocationManager: true,
       );
     } catch (e) {
       debugPrint('Error getting current location: $e');

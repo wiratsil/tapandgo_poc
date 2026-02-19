@@ -88,11 +88,13 @@ class PendingTransaction {
   final String aid;
   final DateTime tapInTime;
   final TransactionLocation tapInLoc;
+  final int? routeId;
 
   PendingTransaction({
     required this.aid,
     required this.tapInTime,
     required this.tapInLoc,
+    this.routeId,
   });
 
   factory PendingTransaction.fromJson(Map<String, dynamic> json) {
@@ -102,6 +104,7 @@ class PendingTransaction {
       tapInLoc: TransactionLocation.fromJson(
         json['tapInLoc'] as Map<String, dynamic>,
       ),
+      routeId: json['routeId'] as int?,
     );
   }
 
@@ -110,6 +113,7 @@ class PendingTransaction {
       'aid': aid,
       'tapInTime': tapInTime.toIso8601String(),
       'tapInLoc': tapInLoc.toJson(),
+      'routeId': routeId,
     };
   }
 }

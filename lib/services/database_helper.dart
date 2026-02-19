@@ -139,4 +139,145 @@ class DatabaseHelper {
     await db.delete('price_ranges');
     await db.delete('bus_trips');
   }
+
+  // Get first routeId from DB (for default/mock usage)
+  Future<int?> getFirstRouteId() async {
+    final db = await database;
+    final List<Map<String, dynamic>> maps = await db.rawQuery(
+      'SELECT DISTINCT routeId FROM route_details LIMIT 1',
+    );
+    if (maps.isNotEmpty) {
+      return maps.first['routeId'] as int?;
+    }
+    return null;
+  }
+
+  // Nearest Bus Stop Logic
+  Future<RouteDetail?> getNearestBusStop(
+    double lat,
+    double lng, {
+    int? routeId,
+  }) async {
+    final db = await database;
+    String whereClause = '';
+    List<dynamic> args = [];
+
+    if (routeId != null) {
+      whereClause = 'WHERE routeId = ?';
+      args.add(routeId);
+    }
+
+    args.addAll([lat, lat, lng, lng]);
+
+    final List<Map<String, dynamic>> maps = await db.rawQuery('''
+      SELECT * FROM route_details
+      $whereClause
+      ORDER BY ((latitude - ?) * (latitude - ?) + (longitude - ?) * (longitude - ?)) ASC
+      LIMIT 1
+    ''', args);
+
+    if (maps.isNotEmpty) {
+      return RouteDetail.fromJson(maps.first);
+    }
+    return null;
+  }
+
+  // Fare Calculation Logic
+  // Step 1: กรอง — routeDetailStartSeq <= tapInSeq AND routeDetailEndSeq >= tapOutSeq
+  // Step 2: เลือก — startSeq ใกล้ tapIn ที่สุด (primary) → endSeq ใกล้ tapOut ที่สุด (secondary)
+  Future<double?> getFare(int tapInSeq, int tapOutSeq, {int? routeId}) async {
+    final db = await database;
+    print(
+      '[DEBUG] 🔍 getFare Query: TapIn=$tapInSeq, TapOut=$tapOutSeq, RouteId=$routeId',
+    );
+
+    // Step 1: Filter — containment
+    String whereClause =
+        'WHERE routeDetailStartSeq <= ? AND routeDetailEndSeq >= ?';
+    List<dynamic> args = [tapInSeq, tapOutSeq];
+
+    if (routeId != null) {
+      whereClause += ' AND routeId = ?';
+      args.add(routeId);
+    }
+
+    final List<Map<String, dynamic>> maps = await db.rawQuery(
+      'SELECT * FROM price_ranges $whereClause',
+      args,
+    );
+
+    print('[DEBUG] 🔍 Found ${maps.length} price candidates');
+
+    if (maps.isNotEmpty) {
+      // Step 2: เลือกที่ใกล้เคียงสุด
+      // 1st priority: minimize |tapInSeq - startSeq| (startSeq ใกล้สุดก่อน)
+      // 2nd priority: minimize |tapOutSeq - endSeq| (endSeq ใกล้สุดเป็น tiebreaker)
+
+      Map<String, dynamic>? bestMatch;
+      int bestStartDist = 999999;
+      int bestEndDist = 999999;
+
+      for (var c in maps) {
+        int startSeq = c['routeDetailStartSeq'] as int;
+        int endSeq = c['routeDetailEndSeq'] as int;
+        int startDist = (tapInSeq - startSeq).abs();
+        int endDist = (tapOutSeq - endSeq).abs();
+
+        print(
+          '[DEBUG] Candidate ID: ${c['id']}, Start: $startSeq, End: $endSeq, Price: ${c['price']}, StartDist: $startDist, EndDist: $endDist',
+        );
+
+        if (startDist < bestStartDist ||
+            (startDist == bestStartDist && endDist < bestEndDist)) {
+          bestStartDist = startDist;
+          bestEndDist = endDist;
+          bestMatch = c;
+        }
+      }
+
+      if (bestMatch != null) {
+        print(
+          '[DEBUG] ✅ Best Match ID: ${bestMatch['id']}, Price: ${bestMatch['price']}, StartDist: $bestStartDist, EndDist: $bestEndDist',
+        );
+
+        var priceVal = bestMatch['price'];
+        if (priceVal is num) return priceVal.toDouble();
+        if (priceVal is String) return double.tryParse(priceVal);
+      }
+    }
+    return null;
+  }
+
+  // Mock Location for Testing
+  Future<RouteDetail?> getRandomBusStop({int? minSeq, int? routeId}) async {
+    final db = await database;
+    List<String> conditions = [];
+    List<dynamic> args = [];
+
+    if (minSeq != null) {
+      conditions.add('seq > ?');
+      args.add(minSeq);
+    }
+
+    if (routeId != null) {
+      conditions.add('routeId = ?');
+      args.add(routeId);
+    }
+
+    String whereClause = conditions.isNotEmpty
+        ? 'WHERE ${conditions.join(' AND ')}'
+        : '';
+
+    final List<Map<String, dynamic>> maps = await db.rawQuery('''
+      SELECT * FROM route_details 
+      $whereClause
+      ORDER BY RANDOM() 
+      LIMIT 1
+    ''', args);
+
+    if (maps.isNotEmpty) {
+      return RouteDetail.fromJson(maps.first);
+    }
+    return null;
+  }
 }

@@ -15,6 +15,9 @@ import 'wifi_sync_screen.dart';
 import 'services/wifi_sync_service.dart';
 import 'services/location_service.dart';
 import 'services/data_sync_service.dart';
+import 'services/database_helper.dart';
+import 'package:sqflite/sqflite.dart';
+
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -74,9 +77,10 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   // WiFi Sync for pending transactions
   final WifiSyncService _syncService = WifiSyncService();
   final LocationService _locationService = LocationService();
+  final DatabaseHelper _dbHelper = DatabaseHelper();
   StreamSubscription<PendingTransactionSync>? _pendingSyncSubscription;
 
-  String _plateNumber = '12-3456';
+  String _plateNumber = '12-2587';
   String _timeString = '00:00';
   Timer? _timer;
 
@@ -311,6 +315,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       _qrSubscription = _mobileScannerController.barcodes.listen((capture) {
         for (final barcode in capture.barcodes) {
           if (barcode.rawValue != null) {
+            print(
+              '********** BEACON: QR Detected: ${barcode.rawValue} **********',
+            );
             debugPrint('QR Code Detected: ${barcode.rawValue}');
             _handleQrDetected(barcode.rawValue!);
             break; // Handle only one at a time
@@ -330,6 +337,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       _nfcSubscription?.cancel();
       _nfcSubscription = _cpaySdkPlugin.onNfcCardDetected.listen((cardPresent) {
         if (cardPresent) {
+          print('********** BEACON: NFC Card Detected! **********');
           debugPrint('NFC Card Detected!');
           _handleNfcDetected();
         }
@@ -503,15 +511,66 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
   // ============ Tap In / Tap Out Logic ============
   Future<void> _handleTapIn(QrData qrData) async {
-    // Get current location
-    final position = await _locationService.getCurrentPosition();
-    final lat = position?.latitude ?? 0.0;
-    final lng = position?.longitude ?? 0.0;
+    // Get current location (or mock if null)
+    // FORCE MOCK: Ignore real GPS for Tap In too
+    // var position = await _locationService.getCurrentPosition();
+    // var lat = position?.latitude ?? 0.0;
+    // var lng = position?.longitude ?? 0.0;
+
+    debugPrint('[DEBUG] ⚠️ FORCING MOCK LOCATION (Tap In)');
+    var lat = 0.0;
+    var lng = 0.0;
+
+    // Get routeId for consistent route filtering
+    final routeId = await _dbHelper.getFirstRouteId();
+    debugPrint('[DEBUG] 🛣️ Using RouteId: $routeId');
+
+    // DEBUG: Check DB content
+    final db = await _dbHelper.database;
+    final routeCount = Sqflite.firstIntValue(
+      await db.rawQuery('SELECT COUNT(*) FROM route_details'),
+    );
+    final routeCountForId = Sqflite.firstIntValue(
+      await db.rawQuery(
+        'SELECT COUNT(*) FROM route_details WHERE routeId = ?',
+        [routeId ?? 0],
+      ),
+    );
+    debugPrint(
+      '[DEBUG] 📊 Route Details Total: $routeCount, For RouteId $routeId: $routeCountForId',
+    );
+
+    // MOCK LOCATION for testing if GPS fails
+    if (lat == 0.0 && lng == 0.0) {
+      debugPrint('[DEBUG] ⚠️ GPS not found, using Mock Location');
+      final randomStop = await _dbHelper.getRandomBusStop(routeId: routeId);
+      debugPrint(
+        '[DEBUG] 📍 getRandomBusStop result: ${randomStop?.busstopDesc ?? "NULL!"}',
+      );
+      if (randomStop != null) {
+        lat = randomStop.latitude;
+        lng = randomStop.longitude;
+        debugPrint(
+          '[DEBUG] 📍 Mock Location: ${randomStop.busstopDesc} (lat=$lat, lng=$lng)',
+        );
+      } else {
+        debugPrint(
+          '[DEBUG] ❌ getRandomBusStop returned null! DB might be empty.',
+        );
+      }
+    }
+
+    // DEBUG: Check if we have price ranges
+    final count = Sqflite.firstIntValue(
+      await db.rawQuery('SELECT COUNT(*) FROM price_ranges'),
+    );
+    debugPrint('[DEBUG] 📊 Price Ranges Count: $count');
 
     final pending = PendingTransaction(
       aid: qrData.aid,
       tapInTime: DateTime.now().toUtc(),
       tapInLoc: TransactionLocation(lat: lat, lng: lng),
+      routeId: routeId,
     );
 
     setState(() {
@@ -529,11 +588,28 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         isRemove: false,
       );
       await _syncService.sendPendingSync(pendingSync);
-      debugPrint('📤 Broadcasted Tap In for ${qrData.aid}');
+      debugPrint('[DEBUG] 📤 Broadcasted Tap In for ${qrData.aid}');
+    }
+
+    // Find nearest bus stop
+    String busStopName = 'ไม่พบข้อมูลป้าย';
+    try {
+      final nearestStop = await _dbHelper.getNearestBusStop(
+        lat,
+        lng,
+        routeId: routeId,
+      );
+      if (nearestStop != null) {
+        busStopName = nearestStop.busstopDesc;
+        debugPrint('[DEBUG] 📍 Nearest Stop (Tap In): $busStopName');
+      }
+    } catch (e) {
+      debugPrint('[DEBUG] ❌ Error finding nearest stop: $e');
+      busStopName = 'ระบุตำแหน่งไม่ได้';
     }
 
     _showResultDialog(
-      'อนุสาวรีย์ชัยฯ',
+      busStopName,
       'บันทึกจุดขึ้นรถแล้ว',
       isSuccess: true,
       price: null,
@@ -557,12 +633,51 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     final pending = _pendingTransactions[qrData.aid]!;
     final tapOutTime = DateTime.now().toUtc();
 
-    // Get current location for Tap Out
-    final position = await _locationService.getCurrentPosition();
-    final tapOutLoc = TransactionLocation(
-      lat: position?.latitude ?? 0.0,
-      lng: position?.longitude ?? 0.0,
+    // Get current location for Tap Out (or mock if null)
+    // FORCE MOCK: Ignore real GPS for now to test fare calculation
+    // var position = await _locationService.getCurrentPosition();
+    // var lat = position?.latitude ?? 0.0;
+    // var lng = position?.longitude ?? 0.0;
+
+    debugPrint('[DEBUG] ⚠️ FORCING MOCK LOCATION (Ignoring Real GPS)');
+    var lat = 0.0;
+    var lng = 0.0;
+
+    // MOCK LOCATION for testing if GPS fails
+    if (lat == 0.0 && lng == 0.0) {
+      debugPrint('[DEBUG] ⚠️ GPS not found, using Mock Location (Tap Out)');
+
+      // Get Tap In Seq to ensure we go forward
+      int minSeq = 0;
+      final tapInStop = await _dbHelper.getNearestBusStop(
+        pending.tapInLoc.lat,
+        pending.tapInLoc.lng,
+        routeId: pending.routeId,
+      );
+      if (tapInStop != null) {
+        minSeq = tapInStop.seq;
+        debugPrint('[DEBUG] 📍 Tap In Stop Seq: $minSeq');
+      }
+
+      final randomStop = await _dbHelper.getRandomBusStop(
+        minSeq: minSeq,
+        routeId: pending.routeId,
+      );
+      if (randomStop != null) {
+        lat = randomStop.latitude;
+        lng = randomStop.longitude;
+        debugPrint(
+          '[DEBUG] 📍 Mock Location (Tap Out): ${randomStop.busstopDesc} (Seq: ${randomStop.seq})',
+        );
+      }
+    }
+
+    debugPrint('[DEBUG] 🔎 TapOut Coords Used: $lat, $lng');
+    debugPrint(
+      '[DEBUG] 🔎 TapIn Coords from Pending: ${pending.tapInLoc.lat}, ${pending.tapInLoc.lng}',
     );
+
+    final tapOutLoc = TransactionLocation(lat: lat, lng: lng);
 
     final txnItem = TransactionItem(
       txnId: _uuid.v4(),
@@ -580,7 +695,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       transactions: [txnItem],
     );
 
-    await _submitTransaction(payload, qrData.aid);
+    await _submitTransaction(payload, qrData.aid, routeId: pending.routeId);
   }
 
   /// Check if device has internet connection
@@ -597,8 +712,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
   Future<void> _submitTransaction(
     TransactionRequest payload,
-    String aid,
-  ) async {
+    String aid, {
+    int? routeId,
+  }) async {
     final url = Uri.parse(
       'https://tng-platform-dev.atlasicloud.com/api/tng/tap/transactions',
     );
@@ -624,15 +740,75 @@ class _WelcomeScreenState extends State<WelcomeScreen>
             isRemove: true,
           );
           await _syncService.sendPendingSync(pendingSync);
-          debugPrint('📤 Broadcasted Tap Out removal for $aid');
+          debugPrint('[DEBUG] 📤 Broadcasted Tap Out removal for $aid');
+        }
+
+        // Find nearest bus stop for Tap Out & Calculate Fare
+        String busStopName = 'ไม่พบข้อมูลป้าย';
+        String priceDisplay = 'ไม่พบราคา';
+
+        try {
+          // Use the location from the payload (which might be mocked)
+          final firstTxn = payload.transactions.first;
+          final lat = firstTxn.tapOutLoc.lat;
+          final lng = firstTxn.tapOutLoc.lng;
+
+          // 1. Get Tap Out Stop
+          final tapOutStop = await _dbHelper.getNearestBusStop(
+            lat,
+            lng,
+            routeId: routeId,
+          );
+
+          if (tapOutStop != null) {
+            busStopName = tapOutStop.busstopDesc;
+            debugPrint(
+              '[DEBUG] 📍 Nearest Stop (Tap Out): $busStopName (Seq: ${tapOutStop.seq})',
+            );
+
+            // 2. Get Tap In Stop (using stored lat/lng from transaction payload)
+            // We need to query DB again to get the sequence number
+            final firstTxn = payload.transactions.first;
+            final tapInStop = await _dbHelper.getNearestBusStop(
+              firstTxn.tapInLoc.lat,
+              firstTxn.tapInLoc.lng,
+              routeId: routeId,
+            );
+
+            if (tapInStop != null) {
+              debugPrint(
+                '[DEBUG] 📍 Nearest Stop (Tap In): ${tapInStop.busstopDesc} (Seq: ${tapInStop.seq})',
+              );
+
+              // 3. Calculate Fare
+              final fare = await _dbHelper.getFare(
+                tapInStop.seq,
+                tapOutStop.seq,
+                routeId: routeId,
+              );
+              if (fare != null) {
+                priceDisplay = '${fare.toStringAsFixed(2)} ฿';
+                debugPrint('[DEBUG] 💰 Calculated Fare: $priceDisplay');
+              } else {
+                debugPrint(
+                  '[DEBUG] ⚠️ No fare found for seq range: ${tapInStop.seq} - ${tapOutStop.seq}',
+                );
+              }
+            } else {
+              debugPrint('[DEBUG] ⚠️ Could not find Tap In stop details');
+            }
+          }
+        } catch (e) {
+          debugPrint('❌ Error finding nearest stop/fare: $e');
+          busStopName = 'ระบุตำแหน่งไม่ได้';
         }
 
         _showResultDialog(
-          'สยามพารากอน',
+          busStopName,
           'ขอบคุณที่ใช้บริการ',
           isSuccess: true,
           isTapOut: true,
-          price: '25.00 ฿',
+          price: priceDisplay,
           balance: '475.00 ฿',
           topStatus: 'ชำระเงินสำเร็จ',
           instruction: 'เดินทางปลอดภัย',
