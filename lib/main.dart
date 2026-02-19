@@ -14,6 +14,7 @@ import 'error_result_screen.dart';
 import 'wifi_sync_screen.dart';
 import 'services/wifi_sync_service.dart';
 import 'services/location_service.dart';
+import 'services/data_sync_service.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -143,7 +144,18 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       _setupPendingSyncListener();
       _updateTime();
       _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
+
+      // Initialize Data Sync
+      _syncData();
     });
+  }
+
+  Future<void> _syncData() async {
+    final syncService = DataSyncService();
+    // Use the stored plate number if available, otherwise default
+    syncService.syncAllData(
+      plateNo: _plateNumber.isNotEmpty ? _plateNumber : '12-2587',
+    );
   }
 
   void _setupPendingSyncListener() {
