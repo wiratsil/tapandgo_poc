@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/services.dart';
 import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
@@ -54,6 +55,11 @@ class WelcomeScreen extends StatefulWidget {
 class _WelcomeScreenState extends State<WelcomeScreen>
     with WidgetsBindingObserver {
   final _cpaySdkPlugin = CpaySdkPlugin();
+
+  // EMV Payment Channel
+  static const MethodChannel _emvPaymentChannel = MethodChannel(
+    'com.example.tapandgo_poc/emv_payment',
+  );
 
   // Transaction State
   final Map<String, PendingTransaction> _pendingTransactions = {};
@@ -185,6 +191,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
           aid: sync.aid,
           tapInTime: sync.tapInTime,
           tapInLoc: TransactionLocation(lat: sync.tapInLat, lng: sync.tapInLng),
+          routeId: sync.routeId,
         );
         setState(() {
           _pendingTransactions[sync.aid] = pending;
@@ -586,6 +593,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         tapInLat: pending.tapInLoc.lat,
         tapInLng: pending.tapInLoc.lng,
         isRemove: false,
+        routeId: routeId,
       );
       await _syncService.sendPendingSync(pendingSync);
       debugPrint('[DEBUG] 📤 Broadcasted Tap In for ${qrData.aid}');
@@ -789,6 +797,39 @@ class _WelcomeScreenState extends State<WelcomeScreen>
               if (fare != null) {
                 priceDisplay = '${fare.toStringAsFixed(2)} ฿';
                 debugPrint('[DEBUG] 💰 Calculated Fare: $priceDisplay');
+
+                // --- ARKE EMV PAYMENT INTEGRATION ---
+                try {
+                  debugPrint('[DEBUG] 💳 Starting EMV Payment for $fare');
+                  final result = await _emvPaymentChannel.invokeMethod(
+                    'startPayment',
+                    {
+                      'amount': fare
+                          .toDouble(), // Fare must be passed as Double
+                    },
+                  );
+                  debugPrint('[DEBUG] ✅ Payment Success: $result');
+
+                  _showResultDialog(
+                    busStopName,
+                    'ขอบคุณที่ใช้บริการ',
+                    isSuccess: true,
+                    isTapOut: true,
+                    price: priceDisplay,
+                    balance:
+                        '475.00 ฿', // Should ideally come from real card/user balance
+                    topStatus: 'ชำระเงินสำเร็จ',
+                    instruction: 'เดินทางปลอดภัย',
+                  );
+                } catch (e) {
+                  debugPrint('[DEBUG] ❌ Payment Failed: $e');
+                  _showResultDialog(
+                    'ชำระเงินไม่สำเร็จ',
+                    'เกิดข้อผิดพลาดในการตัดเงิน: ${e.toString()}',
+                    isSuccess: false,
+                  );
+                }
+                return; // End flow here since payment is handled
               } else {
                 debugPrint(
                   '[DEBUG] ⚠️ No fare found for seq range: ${tapInStop.seq} - ${tapOutStop.seq}',
@@ -803,6 +844,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
           busStopName = 'ระบุตำแหน่งไม่ได้';
         }
 
+        // Fallback for when fare calculation fails
         _showResultDialog(
           busStopName,
           'ขอบคุณที่ใช้บริการ',
@@ -810,7 +852,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
           isTapOut: true,
           price: priceDisplay,
           balance: '475.00 ฿',
-          topStatus: 'ชำระเงินสำเร็จ',
+          topStatus: 'บันทึกประวัติการเดินทาง',
           instruction: 'เดินทางปลอดภัย',
         );
       } else {

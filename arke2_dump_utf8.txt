@@ -1,0 +1,147 @@
+﻿Activity Resolver Table:
+  Non-Data Actions:
+      android.intent.action.MAIN:
+        544515f com.arke2/com.arke.splash.SplashActivity filter c43ddaa
+          Action: "android.intent.action.MAIN"
+          Category: "android.intent.category.LAUNCHER"
+        d5bc7ac com.arke2/com.arke.main.MainActivity filter 1eb5d9b
+          Action: "android.intent.action.MAIN"
+        1f29c75 com.arke2/com.arke.transactions.signin.LoginActivity filter 89e4538
+          Action: "android.intent.action.MAIN"
+
+Receiver Resolver Table:
+  Non-Data Actions:
+      android.intent.action.QUICKBOOT_POWERON:
+        776740a com.arke2/com.arke.autodownload.StartActivityOnBootReceiver filter 5cab911
+          Action: "android.intent.action.BOOT_COMPLETED"
+          Action: "android.intent.action.QUICKBOOT_POWERON"
+      android.intent.action.BOOT_COMPLETED:
+        776740a com.arke2/com.arke.autodownload.StartActivityOnBootReceiver filter 5cab911
+          Action: "android.intent.action.BOOT_COMPLETED"
+          Action: "android.intent.action.QUICKBOOT_POWERON"
+
+Service Resolver Table:
+  Non-Data Actions:
+      android.intent.action.MAIN:
+        e86a47b com.arke2/com.arke.ArkeService filter fda2a76
+          Action: "android.intent.action.MAIN"
+          Category: "android.intent.category.LAUNCHER"
+      com.google.android.gms.gcm.ACTION_TASK_READY:
+        793b298 com.arke2/io.hypertrack.smart_scheduler.SmartSchedulerPeriodicTaskService filter c8e7ce4 permission com.google.android.gms.permission.BIND_NETWORK_TASK_SERVICE
+          Action: "com.google.android.gms.gcm.ACTION_TASK_READY"
+      arke.vas.service:
+        3dd8af1 com.arke2/com.arke.vas.VASService filter 6183877
+          Action: "arke.vas.service"
+          Category: "android.intent.category.DEFAULT"
+
+Registered ContentProviders:
+  com.arke2/com.arke.data.contentprovider.Provider:
+    Provider{d0fc6d6 com.arke2/com.arke.data.contentprovider.Provider}
+
+ContentProvider Authorities:
+  [com.arke.posnet.data.contentprovide.Provider2]:
+    Provider{d0fc6d6 com.arke2/com.arke.data.contentprovider.Provider}
+      applicationInfo=ApplicationInfo{dd10d57 com.arke2}
+
+Key Set Manager:
+  [com.arke2]
+      Signing KeySets: 10
+
+Packages:
+  Package [com.arke2] (c5d6044):
+    userId=10091
+    pkg=Package{faee52d com.arke2}
+    codePath=/data/app/com.arke2-4HX-YKXuM5emffP4jcMQxA==
+    resourcePath=/data/app/com.arke2-4HX-YKXuM5emffP4jcMQxA==
+    legacyNativeLibraryDir=/data/app/com.arke2-4HX-YKXuM5emffP4jcMQxA==/lib
+    primaryCpuAbi=armeabi-v7a
+    secondaryCpuAbi=null
+    versionCode=152 minSdk=22 targetSdk=27
+    versionName=K1.18.38
+    splits=[base]
+    apkSigningVersion=1
+    applicationInfo=ApplicationInfo{dd10d57 com.arke2}
+    flags=[ HAS_CODE ALLOW_CLEAR_USER_DATA ALLOW_BACKUP ]
+    privateFlags=[ PRIVATE_FLAG_ACTIVITIES_RESIZE_MODE_RESIZEABLE_VIA_SDK_VERSION PRIVATE_FLAG_REQUEST_LEGACY_EXTERNAL_STORAGE ]
+    dataDir=/data/user/0/com.arke2
+    supportsScreens=[small, medium, large, xlarge, resizeable, anyDensity]
+    usesLibraries:
+      org.apache.http.legacy
+    usesLibraryFiles:
+      /system/framework/org.apache.http.legacy.jar
+    timeStamp=2026-01-22 15:20:30
+    firstInstallTime=2026-01-22 15:20:32
+    lastUpdateTime=2026-01-22 15:20:32
+    installerPackageName=com.android.packageinstaller
+    signatures=PackageSignatures{5197a62 version:1, signatures:[801fde2], past signatures:[]}
+    installPermissionsFixed=true
+    pkgFlags=[ HAS_CODE ALLOW_CLEAR_USER_DATA ALLOW_BACKUP ]
+    requested permissions:
+      android.permission.ACCESS_NETWORK_STATE
+      android.permission.FOREGROUND_SERVICE
+      android.permission.READ_PROFILE
+      android.permission.READ_EXTERNAL_STORAGE: restricted=true
+      android.permission.WRITE_EXTERNAL_STORAGE: restricted=true
+      android.permission.INTERNET
+      android.permission.SYSTEM_ALERT_WINDOW
+      android.permission.ACTION_MANAGE_OVERLAY_PERMISSION
+      android.permission.WRITE_SETTINGS
+      com.arke.permission.TELLER
+      com.arke.permission.TELLER.TASK
+      arke.permission.teller
+      android.permission.BLUETOOTH
+      android.permission.BLUETOOTH_ADMIN
+      android.permission.RECEIVE_BOOT_COMPLETED
+      android.permission.CPAYSDK_PRINTER_MODULE
+      android.permission.CPAYSDK_NEW_PBOC_MODULE
+      android.permission.CPAYSDK_SYSTEM_MODULE
+      android.permission.CPAYSDK_SWIPE_MODULE
+      android.permission.CPAYSDK_IC_MODULE
+      android.permission.CPAYSDK_RF_MODULE
+      android.permission.CPAYSDK_QUICK_SCAN
+      android.permission.READ_PHONE_STATE
+      android.permission.READ_PRIVILEGED_PHONE_STATE
+      com.google.android.c2dm.permission.RECEIVE
+      android.permission.ACCESS_MEDIA_LOCATION
+    install permissions:
+      android.permission.FOREGROUND_SERVICE: granted=true
+      android.permission.RECEIVE_BOOT_COMPLETED: granted=true
+      android.permission.READ_PROFILE: granted=true
+      android.permission.BLUETOOTH: granted=true
+      android.permission.INTERNET: granted=true
+      android.permission.BLUETOOTH_ADMIN: granted=true
+      android.permission.ACCESS_NETWORK_STATE: granted=true
+    User 0: ceDataInode=-4294960302 installed=true hidden=false suspended=false stopped=false notLaunched=false enabled=0 instant=false virtual=false
+      gids=[3002, 3003, 3001]
+      runtime permissions:
+        android.permission.READ_EXTERNAL_STORAGE: granted=true, flags=[ USER_SENSITIVE_WHEN_GRANTED|USER_SENSITIVE_WHEN_DENIED|RESTRICTION_INSTALLER_EXEMPT]
+        android.permission.READ_PHONE_STATE: granted=false, flags=[ USER_SENSITIVE_WHEN_GRANTED|USER_SENSITIVE_WHEN_DENIED]
+        android.permission.WRITE_EXTERNAL_STORAGE: granted=true, flags=[ USER_SENSITIVE_WHEN_GRANTED|USER_SENSITIVE_WHEN_DENIED|RESTRICTION_INSTALLER_EXEMPT]
+        android.permission.ACCESS_MEDIA_LOCATION: granted=true, flags=[ REVOKE_WHEN_REQUESTED|USER_SENSITIVE_WHEN_GRANTED|USER_SENSITIVE_WHEN_DENIED]
+
+Package Changes:
+  Sequence number=4
+  User 0:
+    seq=3, package=com.example.tapandgo_poc
+
+
+Dexopt state:
+  [com.arke2]
+    path: /data/app/com.arke2-4HX-YKXuM5emffP4jcMQxA==/base.apk
+      arm: [status=speed-profile] [reason=bg-dexopt]
+
+
+Compiler stats:
+  [com.arke2]
+     base.apk - 15390
+
+Active APEX packages:
+
+
+Inactive APEX packages:
+
+
+Factory APEX packages:
+
+
+  APEX session state:

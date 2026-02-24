@@ -46,6 +46,7 @@ class PendingTransactionSync {
   final double tapInLat;
   final double tapInLng;
   final bool isRemove; // true = remove from pending (after tap out)
+  final int? routeId; // route ID for consistent fare calculation
 
   PendingTransactionSync({
     required this.aid,
@@ -53,6 +54,7 @@ class PendingTransactionSync {
     this.tapInLat = 0.0,
     this.tapInLng = 0.0,
     this.isRemove = false,
+    this.routeId,
   });
 
   Map<String, dynamic> toJson() => {
@@ -62,6 +64,7 @@ class PendingTransactionSync {
     'tap_in_lat': tapInLat,
     'tap_in_lng': tapInLng,
     'is_remove': isRemove,
+    'route_id': routeId,
   };
 
   factory PendingTransactionSync.fromJson(Map<String, dynamic> json) =>
@@ -71,10 +74,12 @@ class PendingTransactionSync {
         tapInLat: (json['tap_in_lat'] as num?)?.toDouble() ?? 0.0,
         tapInLng: (json['tap_in_lng'] as num?)?.toDouble() ?? 0.0,
         isRemove: json['is_remove'] as bool? ?? false,
+        routeId: json['route_id'] as int?,
       );
 
   @override
-  String toString() => 'PendingTransactionSync(aid: $aid, isRemove: $isRemove)';
+  String toString() =>
+      'PendingTransactionSync(aid: $aid, isRemove: $isRemove, routeId: $routeId)';
 }
 
 /// Discovered host on the network
