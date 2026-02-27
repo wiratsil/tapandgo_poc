@@ -8,6 +8,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'services/wifi_sync_service.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// WiFi Sync Screen - Allows selecting role (Host/Client) and syncing scan data
 class WifiSyncScreen extends StatefulWidget {
@@ -47,6 +48,7 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
   @override
   void initState() {
     super.initState();
+    _loadSavedHostIp();
     _getLocalIp();
     _setupListeners();
     // Initialize with current service value
@@ -59,6 +61,22 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
 
     // Restore state from singleton if service is already running
     _restoreStateFromService();
+  }
+
+  Future<void> _loadSavedHostIp() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedIp = prefs.getString('last_host_ip');
+      if (savedIp != null && savedIp.isNotEmpty) {
+        if (mounted) {
+          setState(() {
+            _hostIpController.text = savedIp;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Error loading saved Host IP: $e');
+    }
   }
 
   void _restoreStateFromService() {
@@ -259,6 +277,14 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
 
     final success = await _syncService.startAsClient(hostIp: hostIp);
     if (success) {
+      // Save successful IP
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('last_host_ip', hostIp);
+      } catch (e) {
+        debugPrint('Error saving Host IP: $e');
+      }
+
       setState(() {
         _selectedRole = SyncRole.client;
 
