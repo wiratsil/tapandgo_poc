@@ -8,7 +8,6 @@ import 'sync_download_service.dart';
 import '../models/check_version_model.dart';
 import '../models/route_detail_model.dart';
 import '../models/price_range_model.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 class DataSyncService {
   final CommonDataService _commonDataService = CommonDataService();
@@ -19,7 +18,6 @@ class DataSyncService {
 
   // Default plate number
   static const String _defaultPlateNo = '';
-  static const String _versionStorageKey = 'master_data_version';
 
   Future<bool> syncAllData({String plateNo = _defaultPlateNo}) async {
     try {
@@ -74,17 +72,10 @@ class DataSyncService {
         );
       }
 
-      // Read current master data version from SharedPreferences
-      final prefs = await SharedPreferences.getInstance();
-      String currentMasterDataVersion =
-          prefs.getString(_versionStorageKey) ?? "";
-      debugPrint(
-        '[DEBUG] 🏷️ Current Master Data Version: "$currentMasterDataVersion"',
-      );
-
       debugPrint(
         '📥 Checking Version for $plateNo with routeId $activeRouteId...',
       );
+
       final checkVersionRequest = CheckVersionRequest(
         deviceInfo: DeviceInfo(
           deviceId: "EDC-K9-12345", // TODO: Replace with real Device ID
@@ -92,7 +83,7 @@ class DataSyncService {
           appVersion: "1.2.0", // TODO: Replace with real App Version
         ),
         currentVersions: CurrentVersions(
-          masterDataVersion: currentMasterDataVersion,
+          masterDataVersion: "", // Always fetch new version
           routeId: activeRouteId,
         ),
       );
@@ -103,86 +94,82 @@ class DataSyncService {
 
       List<RouteDetail> newRouteDetails = [];
       List<PriceRange> newPriceRanges = [];
-      bool shouldUpdateMasterData = false;
+      bool downloadSuccess = false;
 
       if (checkVersionResponse != null &&
           checkVersionResponse.isSuccess &&
           checkVersionResponse.data != null) {
         final versionData = checkVersionResponse.data!;
 
-        if (versionData.updateRequired) {
-          shouldUpdateMasterData = true;
-          debugPrint(
-            '[DEBUG] 📦 Update required. New version: ${versionData.newVersion}',
-          );
+        // We now ignore updateRequired and always download the files to clear DB.
+        debugPrint(
+          '[DEBUG] 📦 Fetching new files. New version: ${versionData.newVersion}',
+        );
 
-          for (var file in versionData.files) {
-            debugPrint('[DEBUG] 📥 Downloading file from: ${file.url}');
-            final jsonString = await _syncDownloadService
-                .downloadAndDecompressJson(file.url);
-            if (jsonString != null) {
-              debugPrint(
-                '[DEBUG] ✅ Decompressed JSON string length: ${jsonString.length}',
-              );
-              final parsedList = _syncDownloadService.parseJsonList(jsonString);
-              if (parsedList != null) {
-                if (file.module == 'route_details') {
-                  newRouteDetails = parsedList
-                      .map((item) => RouteDetail.fromJson(item))
-                      .toList();
-                  debugPrint(
-                    '[DEBUG] 📦 Downloaded Route Details: ${newRouteDetails.length}',
-                  );
-                } else if (file.module == 'price_ranges') {
-                  newPriceRanges = parsedList
-                      .map((item) => PriceRange.fromJson(item))
-                      .toList();
-                  debugPrint(
-                    '[DEBUG] 📦 Downloaded Price Ranges: ${newPriceRanges.length}',
-                  );
-                }
+        // Track if we actually downloaded anything
+        bool hasFiles = versionData.files.isNotEmpty;
+
+        for (var file in versionData.files) {
+          debugPrint('[DEBUG] 📥 Downloading file from: ${file.url}');
+          final jsonString = await _syncDownloadService
+              .downloadAndDecompressJson(file.url);
+          if (jsonString != null) {
+            debugPrint(
+              '[DEBUG] ✅ Decompressed JSON string length: ${jsonString.length}',
+            );
+            final parsedList = _syncDownloadService.parseJsonList(jsonString);
+            if (parsedList != null) {
+              if (file.module == 'route_details') {
+                newRouteDetails = parsedList
+                    .map((item) => RouteDetail.fromJson(item))
+                    .toList();
+                debugPrint(
+                  '[DEBUG] 📦 Downloaded Route Details: ${newRouteDetails.length}',
+                );
+              } else if (file.module == 'price_ranges') {
+                newPriceRanges = parsedList
+                    .map((item) => PriceRange.fromJson(item))
+                    .toList();
+                debugPrint(
+                  '[DEBUG] 📦 Downloaded Price Ranges: ${newPriceRanges.length}',
+                );
               }
             }
           }
-
-          // Save the new version
-          await prefs.setString(_versionStorageKey, versionData.newVersion);
-          debugPrint(
-            '[DEBUG] 💾 Saved new Master Data Version: ${versionData.newVersion}',
-          );
-        } else {
-          debugPrint(
-            '[DEBUG] 📦 No update required for Master Data. Keeping existing DB.',
-          );
         }
+
+        downloadSuccess = hasFiles;
       } else {
         debugPrint('[DEBUG] ❌ Failed to check version.');
-        // If check version fails, we don't update master data, but we might still want to update common data/bus trips
       }
 
       // 2. Clear existing data and insert new data
-      if (shouldUpdateMasterData) {
+      if (downloadSuccess) {
         debugPrint(
           '[DEBUG] 🧹 Update required: Clearing entirely existing database...',
         );
         await _dbHelper.clearAllData();
 
-        debugPrint('[DEBUG] 💾 Inserting new Master Data...');
+        debugPrint(
+          '[DEBUG] 💾 Inserting new Master Data, Common Data & Bus Trips...',
+        );
         await _dbHelper.insertRouteDetails(newRouteDetails);
         await _dbHelper.insertPriceRanges(newPriceRanges);
+        await _dbHelper.insertCommonData(commonDataResponse.data);
+        await _dbHelper.insertBusTrips(busTripsResponse.data);
       } else {
         debugPrint(
-          '[DEBUG] ⏩ Skipping Master Data DB clear and insert because no update required.',
+          '[DEBUG] ⏩ Skipping full DB clear and Master Data insert because download failed or no files.',
         );
         // We still need to clear common_data and bus_trips since they update frequently
         final db = await _dbHelper.database;
         await db.delete('common_data');
         await db.delete('bus_trips');
-      }
 
-      debugPrint('[DEBUG] 💾 Inserting Common Data & Bus Trips...');
-      await _dbHelper.insertCommonData(commonDataResponse.data);
-      await _dbHelper.insertBusTrips(busTripsResponse.data);
+        debugPrint('[DEBUG] 💾 Inserting Common Data & Bus Trips...');
+        await _dbHelper.insertCommonData(commonDataResponse.data);
+        await _dbHelper.insertBusTrips(busTripsResponse.data);
+      }
 
       debugPrint('[DEBUG] ✅ Data Sync Completed Successfully!');
       return true;

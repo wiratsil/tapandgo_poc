@@ -466,27 +466,13 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
                     // Host Button
                     _buildRoleButton(
                       title: 'Host (Server)',
-                      subtitle: 'เครื่องนี้จะเป็นเซิร์ฟเวอร์รับส่งข้อมูล',
+                      subtitle: 'เลือกเครือข่าย IP เพื่อทำเป็นเซิร์ฟเวอร์',
                       icon: Icons.dns,
                       color: Colors.deepPurple,
-                      onTap: _startAsHost,
+                      onTap: _showNetworkDebugDialog,
                     ),
 
-                    // Host Debug Button
-                    TextButton.icon(
-                      onPressed: _showNetworkDebugDialog,
-                      icon: const Icon(
-                        Icons.bug_report,
-                        size: 16,
-                        color: Colors.grey,
-                      ),
-                      label: const Text(
-                        'Debug Network (ดู IP ทั้งหมด)',
-                        style: TextStyle(color: Colors.grey, fontSize: 12),
-                      ),
-                    ),
-
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 16),
 
                     // Client Button
                     _buildRoleButton(
