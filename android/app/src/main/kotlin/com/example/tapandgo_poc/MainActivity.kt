@@ -32,7 +32,7 @@ class MainActivity : FlutterActivity() {
         pendingResult = result
         try {
             val intent = Intent()
-            val compName = ComponentName("com.arke2", "com.arke.thirdcalling.ThirdPartyCallActivity")
+            val compName = ComponentName("com.arke", "com.arke.thirdcalling.ThirdPartyCallingActivity")
             intent.component = compName
             intent.putExtra("applicationName", "ArkeAcquiringProject")
             intent.putExtra("transactionName", "Consume")

@@ -47,15 +47,20 @@ class RouteDetail {
 
   factory RouteDetail.fromJson(Map<String, dynamic> json) {
     return RouteDetail(
-      id: json['id'] ?? 0,
-      routeId: json['routeId'] ?? 0,
-      seq: json['seq'] ?? 0,
-      busstopId: json['busstopId'] ?? 0,
-      busstopDesc: json['busstopDesc'] ?? '',
-      isExpress: json['isExpress'] == true || json['isExpress'] == 1,
-      afterExpressBusstopId: json['afterExpressBusstopId'],
-      latitude: (json['latitude'] as num?)?.toDouble() ?? 0.0,
-      longitude: (json['longitude'] as num?)?.toDouble() ?? 0.0,
+      id: json['id'] ?? json['i'] ?? 0,
+      routeId:
+          json['routeId'] ?? json['ri'] ?? 0, // Fallback if routeId is minified
+      seq: json['seq'] ?? json['s'] ?? 0,
+      busstopId: json['busstopId'] ?? json['b'] ?? 0,
+      busstopDesc: json['busstopDesc'] ?? json['d'] ?? '',
+      isExpress:
+          json['isExpress'] == true ||
+          json['isExpress'] == 1 ||
+          json['e'] == true ||
+          json['e'] == 1,
+      afterExpressBusstopId: json['afterExpressBusstopId'] ?? json['ae'],
+      latitude: (json['latitude'] ?? json['la'] as num?)?.toDouble() ?? 0.0,
+      longitude: (json['longitude'] ?? json['lo'] as num?)?.toDouble() ?? 0.0,
     );
   }
 

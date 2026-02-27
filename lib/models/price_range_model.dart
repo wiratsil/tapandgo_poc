@@ -47,15 +47,19 @@ class PriceRange {
 
   factory PriceRange.fromJson(Map<String, dynamic> json) {
     return PriceRange(
-      id: json['id'] ?? 0,
-      routeDetailStartId: json['routeDetailStartId'] ?? 0,
-      routeDetailEndId: json['routeDetailEndId'] ?? 0,
-      price: (json['price'] as num?)?.toDouble() ?? 0.0,
-      priceGroupId: json['priceGroupId'] ?? 0,
-      routeId: json['routeId'] ?? 0,
-      afterExpressBusstopId: json['afterExpressBusstopId'] ?? 0,
-      routeDetailStartSeq: json['routeDetailStartSeq'] ?? 0,
-      routeDetailEndSeq: json['routeDetailEndSeq'] ?? 0,
+      id: json['id'] ?? json['i'] ?? 0,
+      routeDetailStartId: json['routeDetailStartId'] ?? json['s'] ?? 0,
+      routeDetailEndId: json['routeDetailEndId'] ?? json['e'] ?? 0,
+      price: (json['price'] ?? json['p'] as num?)?.toDouble() ?? 0.0,
+      priceGroupId: json['priceGroupId'] ?? json['g'] ?? 0,
+      routeId:
+          json['routeId'] ?? json['ri'] ?? 0, // Assuming routeId might be 'ri'
+      afterExpressBusstopId:
+          json['afterExpressBusstopId'] ??
+          json['ae'] ??
+          0, // Assuming this might be 'ae'
+      routeDetailStartSeq: json['routeDetailStartSeq'] ?? json['ss'] ?? 0,
+      routeDetailEndSeq: json['routeDetailEndSeq'] ?? json['se'] ?? 0,
     );
   }
 

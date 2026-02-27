@@ -441,53 +441,67 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
   Widget _buildRoleSelection() {
     return Padding(
       padding: const EdgeInsets.all(16),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text(
-            'เลือก Role',
-            style: Theme.of(
-              context,
-            ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'เลือกว่าเครื่องนี้จะทำหน้าที่เป็น Host หรือ Client',
-            style: TextStyle(color: Colors.grey.shade600),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 32),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return SingleChildScrollView(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: IntrinsicHeight(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      'เลือก Role',
+                      style: Theme.of(context).textTheme.headlineSmall
+                          ?.copyWith(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'เลือกว่าเครื่องนี้จะทำหน้าที่เป็น Host หรือ Client',
+                      style: TextStyle(color: Colors.grey.shade600),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 32),
 
-          // Host Button
-          _buildRoleButton(
-            title: 'Host (Server)',
-            subtitle: 'เครื่องนี้จะเป็นเซิร์ฟเวอร์รับส่งข้อมูล',
-            icon: Icons.dns,
-            color: Colors.deepPurple,
-            onTap: _startAsHost,
-          ),
+                    // Host Button
+                    _buildRoleButton(
+                      title: 'Host (Server)',
+                      subtitle: 'เครื่องนี้จะเป็นเซิร์ฟเวอร์รับส่งข้อมูล',
+                      icon: Icons.dns,
+                      color: Colors.deepPurple,
+                      onTap: _startAsHost,
+                    ),
 
-          // Host Debug Button
-          TextButton.icon(
-            onPressed: _showNetworkDebugDialog,
-            icon: const Icon(Icons.bug_report, size: 16, color: Colors.grey),
-            label: const Text(
-              'Debug Network (ดู IP ทั้งหมด)',
-              style: TextStyle(color: Colors.grey, fontSize: 12),
+                    // Host Debug Button
+                    TextButton.icon(
+                      onPressed: _showNetworkDebugDialog,
+                      icon: const Icon(
+                        Icons.bug_report,
+                        size: 16,
+                        color: Colors.grey,
+                      ),
+                      label: const Text(
+                        'Debug Network (ดู IP ทั้งหมด)',
+                        style: TextStyle(color: Colors.grey, fontSize: 12),
+                      ),
+                    ),
+
+                    const SizedBox(height: 8),
+
+                    // Client Button
+                    _buildRoleButton(
+                      title: 'Client',
+                      subtitle: 'เชื่อมต่อไปยัง Host',
+                      icon: Icons.phone_android,
+                      color: Colors.blue,
+                      onTap: () => _showClientConnectDialog(),
+                    ),
+                  ],
+                ),
+              ),
             ),
-          ),
-
-          const SizedBox(height: 8),
-
-          // Client Button
-          _buildRoleButton(
-            title: 'Client',
-            subtitle: 'เชื่อมต่อไปยัง Host',
-            icon: Icons.phone_android,
-            color: Colors.blue,
-            onTap: () => _showClientConnectDialog(),
-          ),
-        ],
+          );
+        },
       ),
     );
   }
