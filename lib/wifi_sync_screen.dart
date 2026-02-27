@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'dart:io';
 import 'package:network_info_plus/network_info_plus.dart';
 import 'package:uuid/uuid.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import 'services/wifi_sync_service.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -432,6 +434,41 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
                 ],
               ),
             ],
+            if (_selectedRole == SyncRole.host &&
+                _syncService.hostIp != null &&
+                _syncService.hostIp!.isNotEmpty) ...[
+              const Divider(height: 24),
+              const Text(
+                'ให้ Client สแกน QR Code เพื่อเชื่อมต่อ',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 16),
+              Center(
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: QrImageView(
+                    data: _syncService.hostIp!,
+                    version: QrVersions.auto,
+                    size: 150.0,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Center(
+                child: Text(
+                  _syncService.hostIp!,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 2,
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -704,6 +741,18 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
                       borderRadius: BorderRadius.circular(12),
                     ),
                     prefixIcon: const Icon(Icons.wifi),
+                    suffixIcon: IconButton(
+                      icon: const Icon(
+                        Icons.qr_code_scanner,
+                        color: Colors.deepPurple,
+                      ),
+                      onPressed: () async {
+                        final scannedIp = await _scanQrCode();
+                        if (scannedIp != null && mounted) {
+                          _hostIpController.text = scannedIp;
+                        }
+                      },
+                    ),
                   ),
                   keyboardType: TextInputType.number,
                 ),
@@ -729,6 +778,53 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Future<String?> _scanQrCode() async {
+    return showDialog<String>(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Container(
+            height: 400,
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                const Text(
+                  'สแกน QR Code จากเครื่อง Host',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 16),
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: MobileScanner(
+                      onDetect: (capture) {
+                        final barcodes = capture.barcodes;
+                        if (barcodes.isNotEmpty) {
+                          final value = barcodes.first.rawValue;
+                          if (value != null && value.isNotEmpty) {
+                            Navigator.pop(context, value);
+                          }
+                        }
+                      },
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('ยกเลิก'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
