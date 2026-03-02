@@ -15,6 +15,8 @@ import 'error_result_screen.dart';
 import 'wifi_sync_screen.dart';
 import 'services/wifi_sync_service.dart';
 import 'services/location_service.dart';
+import 'services/mqtt_service.dart';
+import 'models/gps_data_model.dart';
 import 'services/data_sync_service.dart';
 import 'services/database_helper.dart';
 import 'package:sqflite/sqflite.dart';
@@ -89,6 +91,11 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   final DatabaseHelper _dbHelper = DatabaseHelper();
   StreamSubscription<PendingTransactionSync>? _pendingSyncSubscription;
 
+  // MQTT Service for GPS
+  final MqttService _mqttService = MqttService();
+  StreamSubscription<GpsData>? _gpsSubscription;
+  GpsData? _currentGpsData;
+
   String _plateNumber = '';
   String _timeString = '00:00';
   Timer? _timer;
@@ -155,6 +162,15 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       _setupPendingSyncListener();
       _updateTime();
       _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
+
+      // Set up MQTT GPS listener
+      _gpsSubscription = _mqttService.gpsStream.listen((gpsData) {
+        if (mounted) {
+          setState(() {
+            _currentGpsData = gpsData;
+          });
+        }
+      });
 
       // Initialize Data Sync only once per session
       if (!_hasAutoSynced) {
@@ -224,9 +240,10 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
     _pendingSyncSubscription?.cancel();
+    _gpsSubscription?.cancel();
+    _mqttService.disconnect();
     _stopBackgroundScanning();
     _mobileScannerController.dispose();
     super.dispose();
@@ -446,8 +463,25 @@ class _WelcomeScreenState extends State<WelcomeScreen>
           _plateNumber = savedPlate;
         });
       }
+
+      // Automatically show an alert if plate number is missing
+      if ((savedPlate == null || savedPlate.isEmpty) && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('กรุณากำหนดทะเบียนรถ (Plate Number) ในหน้าตั้งค่า'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 5),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+
+      // Connect to MQTT when the app starts, regardless of plate number check
+      // It will just maintain connection but not subscribe to GPS topic until plate number is set
+      _mqttService.connect(_plateNumber);
     } catch (e) {
       debugPrint('Error loading plate number: $e');
+      _mqttService.connect(_plateNumber);
     }
   }
 
@@ -522,15 +556,15 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
   // ============ Tap In / Tap Out Logic ============
   Future<void> _handleTapIn(QrData qrData) async {
-    // Get current location (or mock if null)
-    // FORCE MOCK: Ignore real GPS for Tap In too
-    // var position = await _locationService.getCurrentPosition();
-    // var lat = position?.latitude ?? 0.0;
-    // var lng = position?.longitude ?? 0.0;
+    // Get current location (from MQTT GPS)
+    var lat = _currentGpsData?.lat ?? 0.0;
+    var lng = _currentGpsData?.lng ?? 0.0;
 
-    debugPrint('[DEBUG] ⚠️ FORCING MOCK LOCATION (Tap In)');
-    var lat = 0.0;
-    var lng = 0.0;
+    if (lat != 0.0 && lng != 0.0) {
+      debugPrint('[DEBUG] 📍 Using GPS from MQTT: lat=$lat, lng=$lng');
+    } else {
+      debugPrint('[DEBUG] ⚠️ GPS not found or 0.0, using Mock Location');
+    }
 
     // Get routeId for consistent route filtering
     final routeId = await _dbHelper.getFirstRouteId();
@@ -550,26 +584,6 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     debugPrint(
       '[DEBUG] 📊 Route Details Total: $routeCount, For RouteId $routeId: $routeCountForId',
     );
-
-    // MOCK LOCATION for testing if GPS fails
-    if (lat == 0.0 && lng == 0.0) {
-      debugPrint('[DEBUG] ⚠️ GPS not found, using Mock Location');
-      final randomStop = await _dbHelper.getRandomBusStop(routeId: routeId);
-      debugPrint(
-        '[DEBUG] 📍 getRandomBusStop result: ${randomStop?.busstopDesc ?? "NULL!"}',
-      );
-      if (randomStop != null) {
-        lat = randomStop.latitude;
-        lng = randomStop.longitude;
-        debugPrint(
-          '[DEBUG] 📍 Mock Location: ${randomStop.busstopDesc} (lat=$lat, lng=$lng)',
-        );
-      } else {
-        debugPrint(
-          '[DEBUG] ❌ getRandomBusStop returned null! DB might be empty.',
-        );
-      }
-    }
 
     // DEBUG: Check if we have price ranges
     final count = Sqflite.firstIntValue(
@@ -645,43 +659,16 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     final pending = _pendingTransactions[qrData.aid]!;
     final tapOutTime = DateTime.now().toUtc();
 
-    // Get current location for Tap Out (or mock if null)
-    // FORCE MOCK: Ignore real GPS for now to test fare calculation
-    // var position = await _locationService.getCurrentPosition();
-    // var lat = position?.latitude ?? 0.0;
-    // var lng = position?.longitude ?? 0.0;
+    // Get current location for Tap Out (from MQTT GPS)
+    var lat = _currentGpsData?.lat ?? 0.0;
+    var lng = _currentGpsData?.lng ?? 0.0;
 
-    debugPrint('[DEBUG] ⚠️ FORCING MOCK LOCATION (Ignoring Real GPS)');
-    var lat = 0.0;
-    var lng = 0.0;
-
-    // MOCK LOCATION for testing if GPS fails
-    if (lat == 0.0 && lng == 0.0) {
-      debugPrint('[DEBUG] ⚠️ GPS not found, using Mock Location (Tap Out)');
-
-      // Get Tap In Seq to ensure we go forward
-      int minSeq = 0;
-      final tapInStop = await _dbHelper.getNearestBusStop(
-        pending.tapInLoc.lat,
-        pending.tapInLoc.lng,
-        routeId: pending.routeId,
+    if (lat != 0.0 && lng != 0.0) {
+      debugPrint(
+        '[DEBUG] 📍 Using GPS from MQTT (Tap Out): lat=$lat, lng=$lng',
       );
-      if (tapInStop != null) {
-        minSeq = tapInStop.seq;
-        debugPrint('[DEBUG] 📍 Tap In Stop Seq: $minSeq');
-      }
-
-      final randomStop = await _dbHelper.getRandomBusStop(
-        minSeq: minSeq,
-        routeId: pending.routeId,
-      );
-      if (randomStop != null) {
-        lat = randomStop.latitude;
-        lng = randomStop.longitude;
-        debugPrint(
-          '[DEBUG] 📍 Mock Location (Tap Out): ${randomStop.busstopDesc} (Seq: ${randomStop.seq})',
-        );
-      }
+    } else {
+      debugPrint('[DEBUG] ⚠️ GPS not found (Tap Out)');
     }
 
     debugPrint('[DEBUG] 🔎 TapOut Coords Used: $lat, $lng');
@@ -1366,6 +1353,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                   });
                   final prefs = await SharedPreferences.getInstance();
                   await prefs.setString('plate_number', _plateNumber);
+
+                  // Connect MQTT to the new plate number
+                  _mqttService.connect(_plateNumber);
 
                   // Trigger a new data sync for the new plate number
                   if (mounted) {

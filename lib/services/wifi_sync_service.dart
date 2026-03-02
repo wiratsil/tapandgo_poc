@@ -313,11 +313,24 @@ class WifiSyncService {
         });
 
         try {
+          // Standard global broadcast
           _discoverySocket?.send(
             utf8.encode(message),
             InternetAddress(broadcastAddress),
             discoveryPort,
           );
+
+          // Subnet specific broadcast (crucial for Android hotspots)
+          if (_hostIp != null && _hostIp != 'unknown') {
+            final subnetBroadcast = _getSubnetBroadcastAddress(_hostIp!);
+            if (subnetBroadcast != broadcastAddress) {
+              _discoverySocket?.send(
+                utf8.encode(message),
+                InternetAddress(subnetBroadcast),
+                discoveryPort,
+              );
+            }
+          }
           debugPrint('📡 Broadcast sent: $message');
         } catch (e) {
           debugPrint('❌ Broadcast error: $e');
@@ -326,6 +339,16 @@ class WifiSyncService {
     } catch (e) {
       debugPrint('❌ Failed to start discovery broadcast: $e');
     }
+  }
+
+  String _getSubnetBroadcastAddress(String ip) {
+    try {
+      final parts = ip.split('.');
+      if (parts.length == 4) {
+        return '${parts[0]}.${parts[1]}.${parts[2]}.255';
+      }
+    } catch (_) {}
+    return broadcastAddress;
   }
 
   /// Start listening for host discovery broadcasts (called by Client)
