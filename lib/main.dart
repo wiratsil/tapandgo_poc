@@ -98,6 +98,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
   String _plateNumber = '';
   String _timeString = '00:00';
+  String _currentStation = 'กำลังค้นหาสถานี...';
   Timer? _timer;
 
   Widget _buildLoadingUI() {
@@ -164,11 +165,34 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
 
       // Set up MQTT GPS listener
-      _gpsSubscription = _mqttService.gpsStream.listen((gpsData) {
-        if (mounted) {
-          setState(() {
-            _currentGpsData = gpsData;
-          });
+      _gpsSubscription = _mqttService.gpsStream.listen((gpsData) async {
+        if (!mounted) return;
+
+        setState(() {
+          _currentGpsData = gpsData;
+        });
+
+        // Update current station based on new GPS data
+        if (gpsData.lat != 0.0 && gpsData.lng != 0.0) {
+          try {
+            final nearestStop = await _dbHelper.getNearestBusStop(
+              gpsData.lat,
+              gpsData.lng,
+            );
+
+            if (mounted) {
+              setState(() {
+                _currentStation = nearestStop?.busstopDesc ?? 'ไม่พบข้อมูลป้าย';
+              });
+            }
+          } catch (e) {
+            debugPrint('[DEBUG] ❌ Error finding nearest stop for UI: $e');
+            if (mounted) {
+              setState(() {
+                _currentStation = 'ระบุตำแหน่งไม่ได้';
+              });
+            }
+          }
         }
       });
 
@@ -591,9 +615,11 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     );
     debugPrint('[DEBUG] 📊 Price Ranges Count: $count');
 
+    final tapInTime = _currentGpsData?.rec ?? DateTime.now().toUtc();
+
     final pending = PendingTransaction(
       aid: qrData.aid,
-      tapInTime: DateTime.now().toUtc(),
+      tapInTime: tapInTime,
       tapInLoc: TransactionLocation(lat: lat, lng: lng),
       routeId: routeId,
     );
@@ -657,7 +683,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     }
 
     final pending = _pendingTransactions[qrData.aid]!;
-    final tapOutTime = DateTime.now().toUtc();
+    final tapOutTime = _currentGpsData?.rec ?? DateTime.now().toUtc();
 
     // Get current location for Tap Out (from MQTT GPS)
     var lat = _currentGpsData?.lat ?? 0.0;
@@ -1069,7 +1095,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                     ),
                                     SizedBox(width: 8),
                                     Text(
-                                      'สถานีปัจจุบัน: อนุสาวรีย์ชัยฯ',
+                                      'สถานีปัจจุบัน: $_currentStation',
                                       style: TextStyle(
                                         color: Colors.white,
                                         fontSize: 16,

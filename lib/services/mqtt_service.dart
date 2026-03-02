@@ -112,16 +112,17 @@ class MqttService {
           recMess.payload.message,
         );
 
-        debugPrint(
-          '[MQTT] Received message on topic: <${c[0].topic}>, payload: $payload',
-        );
-
         try {
           final Map<String, dynamic> data = jsonDecode(payload);
           final gpsData = GpsData.fromJson(data);
+
+          debugPrint(
+            '[MQTT] Received message on topic: <${c[0].topic}>, parsed: ${gpsData.toJson()}',
+          );
+
           _gpsDataController.add(gpsData);
         } catch (e) {
-          debugPrint('[MQTT] Error parsing payload: $e');
+          debugPrint('[MQTT] Error parsing payload "$payload": $e');
         }
       });
       return true;
