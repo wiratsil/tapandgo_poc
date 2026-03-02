@@ -75,15 +75,11 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
   // Background Scanning State
   bool _isBackgroundScanningActive = false;
+  bool _hasCamera = false;
 
   StreamSubscription<Object?>? _qrSubscription;
   StreamSubscription<bool>? _nfcSubscription;
-  final MobileScannerController _mobileScannerController =
-      MobileScannerController(
-        detectionSpeed: DetectionSpeed.noDuplicates,
-        facing: CameraFacing.front,
-        formats: [BarcodeFormat.qrCode],
-      );
+  MobileScannerController? _mobileScannerController;
 
   // WiFi Sync for pending transactions
   final WifiSyncService _syncService = WifiSyncService();
@@ -157,6 +153,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Check camera availability before creating controller
+      await _checkCameraAvailability();
+
       await _loadPlateNumber();
       _loadPendingTransactions();
       _requestAllPermissions();
@@ -202,6 +201,31 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         await _syncData();
       }
     });
+  }
+
+  Future<void> _checkCameraAvailability() async {
+    const cameraChannel = MethodChannel(
+      'com.example.tapandgo_poc/camera_check',
+    );
+    try {
+      final cameraCount = await cameraChannel.invokeMethod('checkCamera') ?? 0;
+      _hasCamera = cameraCount > 0;
+    } catch (e) {
+      debugPrint('Camera check failed: $e');
+      _hasCamera = false;
+    }
+
+    if (_hasCamera) {
+      _mobileScannerController = MobileScannerController(
+        detectionSpeed: DetectionSpeed.noDuplicates,
+        facing: CameraFacing.front,
+        formats: [BarcodeFormat.qrCode],
+      );
+    } else {
+      debugPrint('[DEBUG] ⚠️ No camera found, MobileScanner disabled');
+    }
+
+    if (mounted) setState(() {});
   }
 
   Future<void> _syncData() async {
@@ -269,17 +293,15 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     _gpsSubscription?.cancel();
     _mqttService.disconnect();
     _stopBackgroundScanning();
-    _mobileScannerController.dispose();
+    _mobileScannerController?.dispose();
     super.dispose();
   }
 
   // ============ Permission Handling ============
-  // ============ Permission Handling ============
   Future<void> _requestAllPermissions() async {
-    // Stop any existing sessions first
+    // Cleanup NFC only (camera lifecycle is managed by MobileScanner widget)
     debugPrint('Cleaning up any existing sessions...');
     try {
-      await _mobileScannerController.stop();
       await _cpaySdkPlugin.stopNfcPolling();
     } catch (e) {
       debugPrint('Cleanup error (can be ignored): $e');
@@ -357,14 +379,16 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   }
 
   Future<void> _startQrScanWithRetry({int retries = 3}) async {
+    if (!_hasCamera || _mobileScannerController == null) {
+      debugPrint('[DEBUG] ⚠️ No camera, skipping QR scan start');
+      return;
+    }
     try {
-      // if (_mobileScannerController.isStarting) return; // Removed invalid property
-
-      await _mobileScannerController.start();
+      await _mobileScannerController!.start();
       debugPrint('Mobile Scanner started');
 
       _qrSubscription?.cancel();
-      _qrSubscription = _mobileScannerController.barcodes.listen((capture) {
+      _qrSubscription = _mobileScannerController!.barcodes.listen((capture) {
         for (final barcode in capture.barcodes) {
           if (barcode.rawValue != null) {
             print(
@@ -413,7 +437,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
     try {
       // await _cpaySdkPlugin.stopQrScan(); // Removed cpay QR stop
-      await _mobileScannerController.stop();
+      await _mobileScannerController?.stop();
       await _cpaySdkPlugin.stopNfcPolling();
     } catch (e) {
       debugPrint('Error stopping background scanning: $e');
@@ -962,14 +986,15 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         body: Stack(
           children: [
             // Hidden MobileScanner widget to keep controller active
-            SizedBox(
-              width: 1,
-              height: 1,
-              child: MobileScanner(
-                controller: _mobileScannerController,
-                onDetect: (capture) {}, // Handled by listener
+            if (_hasCamera && _mobileScannerController != null)
+              SizedBox(
+                width: 1,
+                height: 1,
+                child: MobileScanner(
+                  controller: _mobileScannerController!,
+                  onDetect: (capture) {}, // Handled by listener
+                ),
               ),
-            ),
             _buildLoadingUI(),
           ],
         ),
@@ -1131,36 +1156,47 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                   borderRadius: BorderRadius.circular(16),
                                   child: Stack(
                                     children: [
-                                      MobileScanner(
-                                        controller: _mobileScannerController,
-                                        onDetect:
-                                            (capture) {}, // Handled by listener
-                                        fit: BoxFit.cover,
-
-                                        errorBuilder: (context, error, child) {
-                                          return Center(
-                                            child: Column(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                const Icon(
-                                                  Icons.error,
-                                                  color: Colors.white,
-                                                  size: 32,
-                                                ),
-                                                const SizedBox(height: 8),
-                                                Text(
-                                                  'Error: ${error.errorCode}',
-                                                  style: const TextStyle(
+                                      if (_hasCamera &&
+                                          _mobileScannerController != null)
+                                        MobileScanner(
+                                          controller: _mobileScannerController!,
+                                          onDetect:
+                                              (
+                                                capture,
+                                              ) {}, // Handled by listener
+                                          fit: BoxFit.cover,
+                                          errorBuilder: (context, error, child) {
+                                            return Center(
+                                              child: Column(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  const Icon(
+                                                    Icons.error,
                                                     color: Colors.white,
-                                                    fontSize: 12,
+                                                    size: 32,
                                                   ),
-                                                  textAlign: TextAlign.center,
-                                                ),
-                                              ],
-                                            ),
-                                          );
-                                        },
-                                      ),
+                                                  const SizedBox(height: 8),
+                                                  Text(
+                                                    'Error: ${error.errorCode}',
+                                                    style: const TextStyle(
+                                                      color: Colors.white,
+                                                      fontSize: 12,
+                                                    ),
+                                                    textAlign: TextAlign.center,
+                                                  ),
+                                                ],
+                                              ),
+                                            );
+                                          },
+                                        )
+                                      else
+                                        Center(
+                                          child: Icon(
+                                            Icons.no_photography,
+                                            color: Colors.white54,
+                                            size: 64,
+                                          ),
+                                        ),
                                       Center(
                                         child: Icon(
                                           Icons.qr_code_scanner,

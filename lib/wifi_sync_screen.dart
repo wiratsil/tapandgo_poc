@@ -808,6 +808,37 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
   }
 
   Future<String?> _scanQrCode() async {
+    // Check camera availability before opening scanner
+    const cameraChannel = MethodChannel(
+      'com.example.tapandgo_poc/camera_check',
+    );
+    int cameraCount = 0;
+    try {
+      cameraCount = await cameraChannel.invokeMethod('checkCamera') ?? 0;
+    } catch (e) {
+      debugPrint('Camera check failed: $e');
+    }
+
+    if (cameraCount == 0) {
+      if (!mounted) return null;
+      await showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('ไม่พบกล้อง'),
+          content: const Text(
+            'อุปกรณ์นี้ไม่มีกล้อง ไม่สามารถสแกน QR Code ได้\nกรุณาใส่ IP ด้วยตนเอง',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('ตกลง'),
+            ),
+          ],
+        ),
+      );
+      return null;
+    }
+
     return showDialog<String>(
       context: context,
       builder: (context) {

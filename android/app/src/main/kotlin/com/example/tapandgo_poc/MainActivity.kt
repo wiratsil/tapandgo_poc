@@ -2,6 +2,8 @@ package com.example.tapandgo_poc
 
 import android.content.ComponentName
 import android.content.Intent
+import android.hardware.camera2.CameraManager
+import android.content.Context
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -9,6 +11,7 @@ import org.json.JSONObject
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.example.tapandgo_poc/emv_payment"
+    private val CAMERA_CHANNEL = "com.example.tapandgo_poc/camera_check"
     private val REQUEST_CODE_PAYMENT = 1001
     private var pendingResult: MethodChannel.Result? = null
 
@@ -21,6 +24,20 @@ class MainActivity : FlutterActivity() {
                     startPaymentIntent(amount, result)
                 } else {
                     result.error("INVALID_ARGUMENT", "Amount is required", null)
+                }
+            } else {
+                result.notImplemented()
+            }
+        }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CAMERA_CHANNEL).setMethodCallHandler { call, result ->
+            if (call.method == "checkCamera") {
+                try {
+                    val cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                    val cameraCount = cameraManager.cameraIdList.size
+                    result.success(cameraCount)
+                } catch (e: Exception) {
+                    result.success(0)
                 }
             } else {
                 result.notImplemented()
