@@ -614,6 +614,15 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.4.0"
+  telpo_p60_sdk:
+    dependency: "direct main"
+    description:
+      path: "."
+      ref: main
+      resolved-ref: efcb98f5be88d9f81053c82990051650c51fcfd1
+      url: "https://github.com/wiratsil/telpo_p60_sdk.git"
+    source: git
+    version: "0.0.1"
   term_glyph:
     dependency: transitive
     description:

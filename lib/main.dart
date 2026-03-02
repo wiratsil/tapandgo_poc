@@ -5,6 +5,7 @@ import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:cpay_sdk_plugin/cpay_sdk_plugin.dart';
+import 'package:telpo_p60_sdk/telpo_p60_sdk.dart';
 import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -27,7 +28,11 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await WakelockPlus.enable();
+  try {
+    await WakelockPlus.enable();
+  } catch (e) {
+    debugPrint('WakelockPlus.enable failed: $e');
+  }
   runApp(const MyApp());
 }
 
@@ -57,6 +62,11 @@ class WelcomeScreen extends StatefulWidget {
 class _WelcomeScreenState extends State<WelcomeScreen>
     with WidgetsBindingObserver {
   final _cpaySdkPlugin = CpaySdkPlugin();
+  final _telpoSdk = TelpoP60Sdk();
+
+  // Flag to check if running on Telpo P60 device
+  bool _isP60Device = false;
+  bool _isP60NfcPolling = false;
 
   // Prevent auto sync from running again when returning to this screen
   static bool _hasAutoSynced = false;
@@ -156,6 +166,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       // Check camera availability before creating controller
       await _checkCameraAvailability();
 
+      // Attempt to connect to Telpo P60 SDK
+      await _initTelpoSdk();
+
       await _loadPlateNumber();
       _loadPendingTransactions();
       _requestAllPermissions();
@@ -201,6 +214,19 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         await _syncData();
       }
     });
+  }
+
+  Future<void> _initTelpoSdk() async {
+    try {
+      await _telpoSdk.connect();
+      _isP60Device = true;
+      debugPrint('[DEBUG] ✅ Telpo P60 Service Connected successfully.');
+    } catch (e) {
+      _isP60Device = false;
+      debugPrint(
+        '[DEBUG] ℹ️ Not a Telpo P60 device or Service unavailable: $e',
+      );
+    }
   }
 
   Future<void> _checkCameraAvailability() async {
@@ -294,6 +320,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     _mqttService.disconnect();
     _stopBackgroundScanning();
     _mobileScannerController?.dispose();
+    if (_isP60Device) {
+      _telpoSdk.disconnect();
+    }
     super.dispose();
   }
 
@@ -406,20 +435,70 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   }
 
   Future<void> _startNfcPollingOnly() async {
-    try {
-      final nfcStarted = await _cpaySdkPlugin.startNfcPolling(intervalMs: 500);
-      debugPrint('NFC Polling started: $nfcStarted');
+    if (_isP60Device) {
+      if (_isP60NfcPolling) return;
+      _isP60NfcPolling = true;
+      debugPrint('[DEBUG] 💳 Starting Telpo P60 NFC Polling loop...');
+      _runTelpoNfcLoop();
+    } else {
+      try {
+        final nfcStarted = await _cpaySdkPlugin.startNfcPolling(
+          intervalMs: 500,
+        );
+        debugPrint('NFC Polling started: $nfcStarted');
 
-      _nfcSubscription?.cancel();
-      _nfcSubscription = _cpaySdkPlugin.onNfcCardDetected.listen((cardPresent) {
-        if (cardPresent) {
-          print('********** BEACON: NFC Card Detected! **********');
-          debugPrint('NFC Card Detected!');
-          _handleNfcDetected();
+        _nfcSubscription?.cancel();
+        _nfcSubscription = _cpaySdkPlugin.onNfcCardDetected.listen((
+          cardPresent,
+        ) {
+          if (cardPresent) {
+            print('********** BEACON: NFC Card Detected! **********');
+            debugPrint('NFC Card Detected!');
+            _handleNfcDetected();
+          }
+        });
+      } catch (e) {
+        debugPrint('Failed to start NFC polling: $e');
+      }
+    }
+  }
+
+  Future<void> _runTelpoNfcLoop() async {
+    while (_isP60NfcPolling) {
+      try {
+        final cardData = await _telpoSdk.readEmvCard();
+        if (cardData != null && _isP60NfcPolling) {
+          print('********** BEACON: Telpo NFC Card Detected! **********');
+          debugPrint('Telpo NFC Card Detected! PAN: ${cardData.pan}');
+          await _cpaySdkPlugin.beep();
+          _handleTelpoNfcDetected(cardData.pan);
         }
+      } catch (e) {
+        // Will throw exceptions on timeout or disconnects. Just catch and loop.
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+    }
+  }
+
+  Future<void> _handleTelpoNfcDetected(String pan) async {
+    if (_isProcessing || _isLoading) return;
+
+    _isProcessing = true;
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
       });
-    } catch (e) {
-      debugPrint('Failed to start NFC polling: $e');
+    }
+
+    // Use PAN to generate a unique card ID.
+    // P60 SDK provides full PAN. We hash it or use it directly.
+    final cardId = 'CARD-${pan.hashCode}';
+    final nfcData = QrData(aid: cardId, bal: 100.00);
+
+    if (_pendingTransactions.containsKey(nfcData.aid)) {
+      await _handleTapOut(nfcData);
+    } else {
+      _handleTapIn(nfcData);
     }
   }
 
@@ -432,13 +511,19 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     await _qrSubscription?.cancel();
     _qrSubscription = null;
 
-    await _nfcSubscription?.cancel();
-    _nfcSubscription = null;
+    if (_isP60Device) {
+      _isP60NfcPolling = false;
+    } else {
+      await _nfcSubscription?.cancel();
+      _nfcSubscription = null;
+    }
 
     try {
       // await _cpaySdkPlugin.stopQrScan(); // Removed cpay QR stop
       await _mobileScannerController?.stop();
-      await _cpaySdkPlugin.stopNfcPolling();
+      if (!_isP60Device) {
+        await _cpaySdkPlugin.stopNfcPolling();
+      }
     } catch (e) {
       debugPrint('Error stopping background scanning: $e');
     }

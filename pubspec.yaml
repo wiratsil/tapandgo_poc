@@ -39,6 +39,11 @@ dependencies:
     git:
       url: https://github.com/wiratsil/cpay_sdk_plugin.git
 
+  telpo_p60_sdk:
+    git:
+      url: https://github.com/wiratsil/telpo_p60_sdk.git
+      ref: main
+
   http: ^1.1.0
   uuid: ^4.2.0
   shared_preferences: ^2.2.0
