@@ -6,6 +6,8 @@ import 'package:flutter/foundation.dart';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 import '../models/gps_data_model.dart';
+import '../models/bus_trip_mqtt_model.dart';
+import 'data_sync_service.dart';
 import 'dart:math';
 
 class MqttService {
@@ -19,6 +21,11 @@ class MqttService {
   final StreamController<GpsData> _gpsDataController =
       StreamController<GpsData>.broadcast();
   Stream<GpsData> get gpsStream => _gpsDataController.stream;
+
+  // Stream controller to broadcast Bus Trip data (Optional, currently directly triggers sync)
+  final StreamController<BusTripMqttData> _busTripController =
+      StreamController<BusTripMqttData>.broadcast();
+  Stream<BusTripMqttData> get busTripStream => _busTripController.stream;
 
   String? _currentPlateNo;
   StreamSubscription? _updatesSubscription;
@@ -91,10 +98,15 @@ class MqttService {
       debugPrint('[MQTT] ✅ เชื่อมต่อ MQTT สำเร็จ (Connected successfully)');
 
       if (_currentPlateNo != null && _currentPlateNo!.isNotEmpty) {
-        // Subscribe to the topic
-        final topic = '/gps/$_currentPlateNo';
-        debugPrint('[MQTT] Subscribing to $topic');
-        client.subscribe(topic, MqttQos.atLeastOnce);
+        // Subscribe to the GPS topic
+        final gpsTopic = '/gps/$_currentPlateNo';
+        debugPrint('[MQTT] Subscribing to $gpsTopic');
+        client.subscribe(gpsTopic, MqttQos.atLeastOnce);
+
+        // Subscribe to the Trip topic
+        final tripTopic = '/trip/$_currentPlateNo';
+        debugPrint('[MQTT] Subscribing to $tripTopic');
+        client.subscribe(tripTopic, MqttQos.atLeastOnce);
       } else {
         debugPrint(
           '[MQTT] No plate number provided. Connected but not subscribing to GPS topic.',
@@ -114,13 +126,32 @@ class MqttService {
 
         try {
           final Map<String, dynamic> data = jsonDecode(payload);
-          final gpsData = GpsData.fromJson(data);
 
-          debugPrint(
-            '[MQTT] Received message on topic: <${c[0].topic}>, parsed: ${gpsData.toJson()}',
-          );
+          if (c[0].topic.contains('/trip/')) {
+            final tripData = BusTripMqttData.fromJson(data);
+            debugPrint(
+              '[MQTT] Received TRIP message on topic: <${c[0].topic}>, parsed: ${tripData.toJson()}',
+            );
 
-          _gpsDataController.add(gpsData);
+            _busTripController.add(tripData);
+
+            // Trigger DataSyncService if ActualDateTimeToDestination (td) is null
+            // which implies a new trip started. Wait! The prompt says "if data NO ActualDateTimeToDestination comes with it" -> meaning td == null.
+            if (tripData.td == null) {
+              debugPrint(
+                '[MQTT] 🔄 New Trip started Activity (td is null). Triggering Data Sync...',
+              );
+              final syncService = DataSyncService();
+              syncService.syncAllData(plateNo: _currentPlateNo ?? '');
+            }
+          } else {
+            // Assume GPS payload
+            final gpsData = GpsData.fromJson(data);
+            debugPrint(
+              '[MQTT] Received GPS message on topic: <${c[0].topic}>, parsed: ${gpsData.toJson()}',
+            );
+            _gpsDataController.add(gpsData);
+          }
         } catch (e) {
           debugPrint('[MQTT] Error parsing payload "$payload": $e');
         }
