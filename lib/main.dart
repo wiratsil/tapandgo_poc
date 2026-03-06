@@ -95,6 +95,38 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   StreamSubscription<GpsData>? _gpsSubscription;
   GpsData? _currentGpsData;
 
+  // GPS History — เก็บ record ล่าสุดเพื่อ lookup ด้วยเวลา
+  static const int _maxGpsHistory = 500;
+  final List<GpsData> _gpsHistory = [];
+
+  // Pending EMV Requests — รอ GPS ที่เวลาเลย tapOutTime ก่อนส่ง
+  final List<_PendingEmvRequest> _pendingEmvRequests = [];
+
+  // Pending TapIn GPS — รอ GPS ที่เวลาเลย tapInTime ก่อน resolve
+  final List<_PendingTapInGps> _pendingTapInGpsQueue = [];
+  // Resolved TapIn GPS — เก็บ GPS ที่ resolve แล้วไว้ใช้ตอนส่ง EMV
+  final Map<String, GpsData> _resolvedTapInGps = {};
+
+  /// หา GPS record ที่ใกล้เคียง targetTime ที่สุดจาก history
+  GpsData? _findClosestGps(DateTime targetTime) {
+    if (_gpsHistory.isEmpty) return null;
+
+    GpsData? closest;
+    int smallestDiff = 0x7FFFFFFFFFFFFFFF; // max int
+
+    for (final gps in _gpsHistory) {
+      if (gps.rec == null) continue;
+      final diff =
+          (gps.rec!.millisecondsSinceEpoch - targetTime.millisecondsSinceEpoch)
+              .abs();
+      if (diff < smallestDiff) {
+        smallestDiff = diff;
+        closest = gps;
+      }
+    }
+    return closest;
+  }
+
   String _plateNumber = '';
   String _timeString = '00:00';
   String _currentStation = 'กำลังค้นหาสถานี...';
@@ -173,6 +205,81 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         setState(() {
           _currentGpsData = gpsData;
         });
+
+        // บันทึก GPS history
+        _gpsHistory.add(gpsData);
+        if (_gpsHistory.length > _maxGpsHistory) {
+          _gpsHistory.removeAt(0);
+        }
+        debugPrint(
+          '[EMV] 📡 GPS received: rec=${gpsData.rec}, lat=${gpsData.lat}, lng=${gpsData.lng}, '
+          'box=${gpsData.box}, spd=${gpsData.spd} | history size=${_gpsHistory.length}',
+        );
+
+        // ตรวจสอบ pending EMV requests — ถ้า GPS rec เลยเวลา tapOut แล้วให้ส่ง EMV transaction
+        if (_pendingEmvRequests.isNotEmpty && gpsData.rec != null) {
+          debugPrint(
+            '[EMV] 🔍 Checking ${_pendingEmvRequests.length} pending EMV request(s)...',
+          );
+          final toRemove = <_PendingEmvRequest>[];
+          for (final pending in _pendingEmvRequests) {
+            final isPast = gpsData.rec!.isAfter(pending.tapOutTime);
+            debugPrint(
+              '[EMV]   └─ tapOutTime=${pending.tapOutTime}, gpsRec=${gpsData.rec}, isPast=$isPast',
+            );
+            if (isPast) {
+              debugPrint(
+                '[EMV] ✅ GPS time passed tapOutTime! Firing EMV transaction...',
+              );
+              _submitEmvTransaction(pending.payload, routeId: pending.routeId);
+              toRemove.add(pending);
+            }
+          }
+          for (final r in toRemove) {
+            _pendingEmvRequests.remove(r);
+            final aid = r.payload.transactions.first.assetId;
+            _resolvedTapInGps.remove(aid);
+            debugPrint(
+              '[EMV] 🗑️ Cleaned up resolved TapIn GPS for $aid | remaining pending=${_pendingEmvRequests.length}',
+            );
+          }
+        }
+
+        // ตรวจสอบ pending TapIn GPS — ถ้า GPS rec เลยเวลา tapInTime แล้วให้ resolve
+        if (_pendingTapInGpsQueue.isNotEmpty && gpsData.rec != null) {
+          debugPrint(
+            '[EMV] 🔍 Checking ${_pendingTapInGpsQueue.length} pending TapIn GPS resolution(s)...',
+          );
+          final toRemove = <_PendingTapInGps>[];
+          for (final pending in _pendingTapInGpsQueue) {
+            final isPast = gpsData.rec!.isAfter(pending.tapInTime);
+            debugPrint(
+              '[EMV]   └─ aid=${pending.aid}, tapInTime=${pending.tapInTime}, gpsRec=${gpsData.rec}, isPast=$isPast',
+            );
+            if (isPast) {
+              final closestGps = _findClosestGps(pending.tapInTime);
+              if (closestGps != null) {
+                _resolvedTapInGps[pending.aid] = closestGps;
+                debugPrint(
+                  '[EMV] ✅ TapIn GPS resolved for ${pending.aid}: '
+                  'closestGpsTime=${closestGps.rec}, lat=${closestGps.lat}, lng=${closestGps.lng}, '
+                  'box=${closestGps.box}, spd=${closestGps.spd}',
+                );
+              } else {
+                debugPrint(
+                  '[EMV] ⚠️ No GPS found in history for TapIn ${pending.aid}',
+                );
+              }
+              toRemove.add(pending);
+            }
+          }
+          _pendingTapInGpsQueue.removeWhere((e) => toRemove.contains(e));
+          if (toRemove.isNotEmpty) {
+            debugPrint(
+              '[EMV] 📋 Resolved ${toRemove.length} TapIn GPS | remaining queue=${_pendingTapInGpsQueue.length} | total resolved=${_resolvedTapInGps.length}',
+            );
+          }
+        }
 
         // Update current station based on new GPS data
         if (gpsData.lat != 0.0 && gpsData.lng != 0.0) {
@@ -656,6 +763,20 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     });
     await _savePendingTransactions();
 
+    // Queue TapIn GPS resolution — รอ GPS ที่เวลาเลย tapInTime ก่อน resolve
+    _pendingTapInGpsQueue.add(
+      _PendingTapInGps(aid: qrData.aid, tapInTime: tapInTime),
+    );
+    debugPrint('[EMV] ========== TAP-IN EMV FLOW ==========');
+    debugPrint('[EMV] 📝 Queued TapIn GPS resolution');
+    debugPrint('[EMV]   ├─ aid: ${qrData.aid}');
+    debugPrint('[EMV]   ├─ tapInTime: $tapInTime');
+    debugPrint('[EMV]   ├─ current GPS history size: ${_gpsHistory.length}');
+    debugPrint(
+      '[EMV]   └─ pending TapIn queue size: ${_pendingTapInGpsQueue.length}',
+    );
+    debugPrint('[EMV] ⏳ Waiting for GPS rec > $tapInTime ...');
+
     // Broadcast to other devices via WiFi Sync
     if (_syncService.isRunning) {
       final pendingSync = PendingTransactionSync(
@@ -795,8 +916,29 @@ class _WelcomeScreenState extends State<WelcomeScreen>
           debugPrint('[DEBUG] 📤 Broadcasted Tap Out removal for $aid');
         }
 
-        // --- Submit EMV Transaction ---
-        _submitEmvTransaction(payload, routeId: routeId);
+        // --- Queue EMV Transaction — รอ GPS ที่เวลาเลย tapOutTime ก่อนส่ง ---
+        final tapOutTime = DateTime.parse(
+          payload.transactions.first.tapOutTime,
+        );
+        _pendingEmvRequests.add(
+          _PendingEmvRequest(
+            payload: payload,
+            routeId: routeId,
+            tapOutTime: tapOutTime,
+          ),
+        );
+        debugPrint('[EMV] ========== TAP-OUT EMV FLOW ==========');
+        debugPrint('[EMV] 📝 Queued EMV transaction (waiting for GPS)');
+        debugPrint('[EMV]   ├─ aid: $aid');
+        debugPrint('[EMV]   ├─ tapOutTime: $tapOutTime');
+        debugPrint(
+          '[EMV]   ├─ tapInGps resolved: ${_resolvedTapInGps.containsKey(aid)}',
+        );
+        debugPrint('[EMV]   ├─ GPS history size: ${_gpsHistory.length}');
+        debugPrint(
+          '[EMV]   └─ pending EMV queue size: ${_pendingEmvRequests.length}',
+        );
+        debugPrint('[EMV] ⏳ Waiting for GPS rec > $tapOutTime ...');
 
         // Find nearest bus stop for Tap Out & Calculate Fare
         String busStopName = 'ไม่พบข้อมูลป้าย';
@@ -919,30 +1061,99 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     }
   }
 
-  /// Build and submit EMV Transaction (fire-and-forget after main transaction)
+  /// Build and submit EMV Transaction
   Future<void> _submitEmvTransaction(
     TransactionRequest originalPayload, {
     int? routeId,
   }) async {
     try {
       final firstTxn = originalPayload.transactions.first;
+      debugPrint('[EMV] ========== BUILDING EMV TRANSACTION ==========');
+      debugPrint(
+        '[EMV] 🛠️ txnId: ${firstTxn.txnId}, assetId: ${firstTxn.assetId}',
+      );
 
-      // Get nearest bus stops for tap-in & tap-out
+      // Parse tap times
+      final tapInTime = DateTime.parse(firstTxn.tapInTime);
+      final tapOutTime = DateTime.parse(firstTxn.tapOutTime);
+      debugPrint('[EMV] ⏱️ tapInTime: $tapInTime, tapOutTime: $tapOutTime');
+
+      // --- TapIn GPS ---
+      final hasResolvedTapIn = _resolvedTapInGps.containsKey(firstTxn.assetId);
+      final tapInGps =
+          _resolvedTapInGps[firstTxn.assetId] ?? _findClosestGps(tapInTime);
+      final tapInGpsLat = tapInGps?.lat ?? firstTxn.tapInLoc.lat;
+      final tapInGpsLng = tapInGps?.lng ?? firstTxn.tapInLoc.lng;
+      debugPrint('[EMV] 📍 TapIn GPS:');
+      debugPrint(
+        '[EMV]   ├─ source: ${hasResolvedTapIn ? "RESOLVED (pre-captured)" : "HISTORY LOOKUP"}',
+      );
+      debugPrint('[EMV]   ├─ gpsTime: ${tapInGps?.rec}');
+      debugPrint('[EMV]   ├─ lat: $tapInGpsLat, lng: $tapInGpsLng');
+      debugPrint('[EMV]   ├─ box: ${tapInGps?.box}, spd: ${tapInGps?.spd}');
+      if (tapInGps == null) {
+        debugPrint('[EMV]   └─ ⚠️ FALLBACK to original transaction lat/lng');
+      } else {
+        final diffMs =
+            (tapInGps.rec!.millisecondsSinceEpoch -
+                    tapInTime.millisecondsSinceEpoch)
+                .abs();
+        debugPrint(
+          '[EMV]   └─ time diff from tapInTime: ${diffMs}ms (${(diffMs / 1000).toStringAsFixed(1)}s)',
+        );
+      }
+
+      // --- TapOut GPS ---
+      final tapOutGps = _findClosestGps(tapOutTime);
+      final tapOutGpsLat = tapOutGps?.lat ?? firstTxn.tapOutLoc.lat;
+      final tapOutGpsLng = tapOutGps?.lng ?? firstTxn.tapOutLoc.lng;
+      debugPrint('[EMV] 📍 TapOut GPS:');
+      debugPrint('[EMV]   ├─ source: HISTORY LOOKUP');
+      debugPrint('[EMV]   ├─ gpsTime: ${tapOutGps?.rec}');
+      debugPrint('[EMV]   ├─ lat: $tapOutGpsLat, lng: $tapOutGpsLng');
+      debugPrint('[EMV]   ├─ box: ${tapOutGps?.box}, spd: ${tapOutGps?.spd}');
+      if (tapOutGps == null) {
+        debugPrint('[EMV]   └─ ⚠️ FALLBACK to original transaction lat/lng');
+      } else {
+        final diffMs =
+            (tapOutGps.rec!.millisecondsSinceEpoch -
+                    tapOutTime.millisecondsSinceEpoch)
+                .abs();
+        debugPrint(
+          '[EMV]   └─ time diff from tapOutTime: ${diffMs}ms (${(diffMs / 1000).toStringAsFixed(1)}s)',
+        );
+      }
+
+      // --- Bus Stops ---
       final tapInStop = await _dbHelper.getNearestBusStop(
-        firstTxn.tapInLoc.lat,
-        firstTxn.tapInLoc.lng,
+        tapInGpsLat,
+        tapInGpsLng,
         routeId: routeId,
       );
       final tapOutStop = await _dbHelper.getNearestBusStop(
-        firstTxn.tapOutLoc.lat,
-        firstTxn.tapOutLoc.lng,
+        tapOutGpsLat,
+        tapOutGpsLng,
         routeId: routeId,
       );
+      debugPrint('[EMV] 🚏 Bus Stops:');
+      debugPrint(
+        '[EMV]   ├─ TapIn: id=${tapInStop?.busstopId}, name=${tapInStop?.busstopDesc}, seq=${tapInStop?.seq}',
+      );
+      debugPrint(
+        '[EMV]   └─ TapOut: id=${tapOutStop?.busstopId}, name=${tapOutStop?.busstopDesc}, seq=${tapOutStop?.seq}',
+      );
 
-      // Get active bus trip for fare info
+      // --- Active Bus Trip ---
       final activeBusTrip = await _dbHelper.getActiveBusTrip();
+      debugPrint('[EMV] 🚌 Active Bus Trip:');
+      debugPrint(
+        '[EMV]   ├─ id: ${activeBusTrip?.id}, routeId: ${activeBusTrip?.routeId}',
+      );
+      debugPrint(
+        '[EMV]   └─ buslineId: ${activeBusTrip?.buslineId}, busno: ${activeBusTrip?.busno}',
+      );
 
-      // Calculate fare
+      // --- Fare ---
       double fareAmount = 0.0;
       if (tapInStop != null && tapOutStop != null) {
         fareAmount =
@@ -953,18 +1164,14 @@ class _WelcomeScreenState extends State<WelcomeScreen>
             ) ??
             0.0;
       }
-
-      // GPS data
-      final gpsBoxId = _currentGpsData?.box ?? '';
-      final gpsRecDatetime =
-          _currentGpsData?.rec?.toUtc().toIso8601String() ??
-          DateTime.now().toUtc().toIso8601String();
-      final gpsSpeed = _currentGpsData?.spd ?? 0.0;
+      debugPrint(
+        '[EMV] 💰 Fare: $fareAmount (tapInSeq=${tapInStop?.seq}, tapOutSeq=${tapOutStop?.seq})',
+      );
 
       // Build EmvTapLocation for tap-in
       final emvTapInLoc = EmvTapLocation(
-        latitude: firstTxn.tapInLoc.lat,
-        longitude: firstTxn.tapInLoc.lng,
+        latitude: tapInGpsLat,
+        longitude: tapInGpsLng,
         busstopId: tapInStop?.busstopId ?? 0,
         busstopName: tapInStop?.busstopDesc ?? '',
         busstopLatitude: tapInStop?.latitude ?? 0.0,
@@ -973,15 +1180,17 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         gpsbusstopName: tapInStop?.busstopDesc ?? '',
         gpsbusstopLatitude: tapInStop?.latitude ?? 0.0,
         gpsbusstopLongitude: tapInStop?.longitude ?? 0.0,
-        gpsBoxId: gpsBoxId,
-        gpsRecDatetime: gpsRecDatetime,
-        gpsSpeed: gpsSpeed,
+        gpsBoxId: tapInGps?.box ?? '',
+        gpsRecDatetime:
+            tapInGps?.rec?.toUtc().toIso8601String() ??
+            tapInTime.toIso8601String(),
+        gpsSpeed: tapInGps?.spd ?? 0.0,
       );
 
       // Build EmvTapLocation for tap-out
       final emvTapOutLoc = EmvTapLocation(
-        latitude: firstTxn.tapOutLoc.lat,
-        longitude: firstTxn.tapOutLoc.lng,
+        latitude: tapOutGpsLat,
+        longitude: tapOutGpsLng,
         busstopId: tapOutStop?.busstopId ?? 0,
         busstopName: tapOutStop?.busstopDesc ?? '',
         busstopLatitude: tapOutStop?.latitude ?? 0.0,
@@ -990,9 +1199,11 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         gpsbusstopName: tapOutStop?.busstopDesc ?? '',
         gpsbusstopLatitude: tapOutStop?.latitude ?? 0.0,
         gpsbusstopLongitude: tapOutStop?.longitude ?? 0.0,
-        gpsBoxId: gpsBoxId,
-        gpsRecDatetime: gpsRecDatetime,
-        gpsSpeed: gpsSpeed,
+        gpsBoxId: tapOutGps?.box ?? '',
+        gpsRecDatetime:
+            tapOutGps?.rec?.toUtc().toIso8601String() ??
+            tapOutTime.toIso8601String(),
+        gpsSpeed: tapOutGps?.spd ?? 0.0,
       );
 
       // Build EmvFareInfo
@@ -1029,15 +1240,19 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         transactions: [emvTxnItem],
       );
 
-      // Fire and forget — don't block UI
+      debugPrint('[EMV] 📦 Payload built. Sending to API...');
+      debugPrint('[EMV]   ├─ deviceId: ${emvRequest.deviceId}');
+      debugPrint('[EMV]   └─ plateNo: ${emvRequest.plateNo}');
+
+      // Send
       final success = await _emvTransactionService.submitEmvTransaction(
         emvRequest,
       );
       debugPrint(
-        '[DEBUG] 💳 EMV Transaction ${success ? "✅ succeeded" : "❌ failed"}',
+        '[EMV] ========== EMV RESULT: ${success ? "✅ SUCCESS" : "❌ FAILED"} ==========',
       );
     } catch (e) {
-      debugPrint('[DEBUG] ❌ Error in _submitEmvTransaction: $e');
+      debugPrint('[EMV] ❌ EXCEPTION in _submitEmvTransaction: $e');
     }
   }
 
@@ -1568,4 +1783,25 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       },
     );
   }
+}
+
+/// Pending EMV request — รอ GPS ที่เวลาเลย tapOutTime ก่อนส่ง
+class _PendingEmvRequest {
+  final TransactionRequest payload;
+  final int? routeId;
+  final DateTime tapOutTime;
+
+  _PendingEmvRequest({
+    required this.payload,
+    this.routeId,
+    required this.tapOutTime,
+  });
+}
+
+/// Pending TapIn GPS — รอ GPS ที่เวลาเลย tapInTime ก่อน resolve
+class _PendingTapInGps {
+  final String aid;
+  final DateTime tapInTime;
+
+  _PendingTapInGps({required this.aid, required this.tapInTime});
 }
