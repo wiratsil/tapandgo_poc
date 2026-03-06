@@ -593,13 +593,37 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         onTimeout: () => null,
       );
       if (emvData != null && emvData.isNotEmpty) {
-        cardId = 'CARD-${emvData.hashCode}';
+        debugPrint('[NFC] 📄 Raw EMV Data:\n$emvData');
+
+        // Parse AID (priority) or Card No (fallback) from multiline EMV string
+        String? aid;
+        String? cardNo;
+        for (final line in emvData.split('\n')) {
+          final trimmed = line.trim();
+          if (trimmed.startsWith('AID:')) {
+            aid = trimmed.substring(4).trim();
+          } else if (trimmed.startsWith('Card No:')) {
+            cardNo = trimmed.substring(8).trim();
+          }
+        }
+
+        if (aid != null && aid.isNotEmpty) {
+          cardId = aid;
+          debugPrint('[NFC] ✅ Using AID: $cardId');
+        } else if (cardNo != null && cardNo.isNotEmpty) {
+          cardId = cardNo;
+          debugPrint('[NFC] ✅ Using Card No (AID not found): $cardId');
+        } else {
+          cardId = emvData;
+          debugPrint('[NFC] ⚠️ Could not parse AID/CardNo, using raw data');
+        }
       } else {
-        cardId = 'TEST-CARD-1234';
+        cardId = 'UNKNOWN-CARD';
+        debugPrint('[NFC] ⚠️ readCardEmv returned null/empty');
       }
     } catch (e) {
-      debugPrint('Read EMV Failed: $e');
-      cardId = 'TEST-CARD-1234';
+      debugPrint('[NFC] ❌ Read EMV Failed: $e');
+      cardId = 'UNKNOWN-CARD';
     }
 
     final nfcData = QrData(aid: cardId, bal: 100.00);
@@ -1753,24 +1777,49 @@ class _WelcomeScreenState extends State<WelcomeScreen>
               onPressed: () async {
                 if (controller.text.isNotEmpty &&
                     controller.text != _plateNumber) {
+                  // Close dialog first
+                  Navigator.of(context).pop();
+
+                  // Show loading UI
                   setState(() {
                     _plateNumber = controller.text;
+                    _isLoading = true;
+
+                    // Clear all stale state from previous plate
+                    _gpsHistory.clear();
+                    _pendingEmvRequests.clear();
+                    _pendingTapInGpsQueue.clear();
+                    _resolvedTapInGps.clear();
+                    _pendingTransactions.clear();
+                    _currentGpsData = null;
                   });
+
+                  // Save to SharedPreferences
                   final prefs = await SharedPreferences.getInstance();
                   await prefs.setString('plate_number', _plateNumber);
+                  await _savePendingTransactions(); // persist cleared transactions
 
                   // Connect MQTT to the new plate number
                   _mqttService.connect(_plateNumber);
 
                   // Trigger a new data sync for the new plate number
+                  try {
+                    await _syncData();
+                  } catch (e) {
+                    debugPrint('[DEBUG] ❌ Sync error after plate change: $e');
+                  }
+
+                  // Hide loading UI
                   if (mounted) {
-                    Navigator.of(context).pop();
+                    setState(() {
+                      _isLoading = false;
+                    });
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
-                        content: Text('กำลังอัปเดตข้อมูลสำหรับรถคันใหม่...'),
+                        content: Text('อัปเดตข้อมูลสำหรับรถคันใหม่เรียบร้อย'),
+                        backgroundColor: Colors.green,
                       ),
                     );
-                    await _syncData();
                   }
                 } else {
                   if (mounted) Navigator.of(context).pop();
