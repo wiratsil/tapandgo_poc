@@ -1,0 +1,152 @@
+/// Location data for EMV tap (with bus stop + GPS box details)
+class EmvTapLocation {
+  final double latitude;
+  final double longitude;
+  final int busstopId;
+  final String busstopName;
+  final double busstopLatitude;
+  final double busstopLongitude;
+  final double busstopDistance;
+  final String gpsbusstopName;
+  final double gpsbusstopLatitude;
+  final double gpsbusstopLongitude;
+  final String gpsBoxId;
+  final String gpsRecDatetime;
+  final double gpsSpeed;
+
+  EmvTapLocation({
+    required this.latitude,
+    required this.longitude,
+    required this.busstopId,
+    required this.busstopName,
+    required this.busstopLatitude,
+    required this.busstopLongitude,
+    required this.busstopDistance,
+    required this.gpsbusstopName,
+    required this.gpsbusstopLatitude,
+    required this.gpsbusstopLongitude,
+    required this.gpsBoxId,
+    required this.gpsRecDatetime,
+    required this.gpsSpeed,
+  });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'latitude': latitude,
+      'longitude': longitude,
+      'busstop_id': busstopId,
+      'busstop_name': busstopName,
+      'busstop_latitude': busstopLatitude,
+      'busstop_longitude': busstopLongitude,
+      'busstop_distance': busstopDistance,
+      'gps_busstop_name': gpsbusstopName,
+      'gps_busstop_latitude': gpsbusstopLatitude,
+      'gps_busstop_longitude': gpsbusstopLongitude,
+      'gps_box_id': gpsBoxId,
+      'gps_rec_datetime': gpsRecDatetime,
+      'gps_speed': gpsSpeed,
+    };
+  }
+}
+
+/// Fare breakdown info for an EMV transaction
+class EmvFareInfo {
+  final int bustripId;
+  final int routeId;
+  final int buslineId;
+  final int businfoId;
+  final String busNo;
+  final bool isMorning;
+  final bool isExpress;
+  final double morningAmount;
+  final double expressAmount;
+  final double fareAmount;
+  final double totalAmount;
+
+  EmvFareInfo({
+    required this.bustripId,
+    required this.routeId,
+    required this.buslineId,
+    required this.businfoId,
+    required this.busNo,
+    required this.isMorning,
+    required this.isExpress,
+    required this.morningAmount,
+    required this.expressAmount,
+    required this.fareAmount,
+    required this.totalAmount,
+  });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'bustrip_id': bustripId,
+      'route_id': routeId,
+      'busline_id': buslineId,
+      'businfo_id': businfoId,
+      'bus_no': busNo,
+      'is_morning': isMorning,
+      'is_express': isExpress,
+      'morning_amount': morningAmount,
+      'express_amount': expressAmount,
+      'fare_amount': fareAmount,
+      'total_amount': totalAmount,
+    };
+  }
+}
+
+/// A single EMV transaction item
+class EmvTransactionItem {
+  final String txnId;
+  final String assetId;
+  final String assetType;
+  final String tapInTime;
+  final EmvTapLocation tapInLoc;
+  final String tapOutTime;
+  final EmvTapLocation tapOutLoc;
+  final EmvFareInfo fareInfo;
+
+  EmvTransactionItem({
+    required this.txnId,
+    required this.assetId,
+    required this.assetType,
+    required this.tapInTime,
+    required this.tapInLoc,
+    required this.tapOutTime,
+    required this.tapOutLoc,
+    required this.fareInfo,
+  });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'txn_id': txnId,
+      'asset_id': assetId,
+      'asset_type': assetType,
+      'tap_in_time': tapInTime,
+      'tap_in_loc': tapInLoc.toJson(),
+      'tap_out_time': tapOutTime,
+      'tap_out_loc': tapOutLoc.toJson(),
+      'fare_info': fareInfo.toJson(),
+    };
+  }
+}
+
+/// Request body for POST /tap/transactions/emv
+class EmvTransactionRequest {
+  final String deviceId;
+  final String plateNo;
+  final List<EmvTransactionItem> transactions;
+
+  EmvTransactionRequest({
+    required this.deviceId,
+    required this.plateNo,
+    required this.transactions,
+  });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'device_id': deviceId,
+      'plate_no': plateNo,
+      'transactions': transactions.map((e) => e.toJson()).toList(),
+    };
+  }
+}

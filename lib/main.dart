@@ -19,6 +19,8 @@ import 'services/mqtt_service.dart';
 import 'models/gps_data_model.dart';
 import 'services/data_sync_service.dart';
 import 'services/database_helper.dart';
+import 'services/emv_transaction_service.dart';
+import 'models/emv_transaction_model.dart';
 import 'package:sqflite/sqflite.dart';
 
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -85,6 +87,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   final WifiSyncService _syncService = WifiSyncService();
   final LocationService _locationService = LocationService();
   final DatabaseHelper _dbHelper = DatabaseHelper();
+  final EmvTransactionService _emvTransactionService = EmvTransactionService();
   StreamSubscription<PendingTransactionSync>? _pendingSyncSubscription;
 
   // MQTT Service for GPS
@@ -792,6 +795,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
           debugPrint('[DEBUG] 📤 Broadcasted Tap Out removal for $aid');
         }
 
+        // --- Submit EMV Transaction ---
+        _submitEmvTransaction(payload, routeId: routeId);
+
         // Find nearest bus stop for Tap Out & Calculate Fare
         String busStopName = 'ไม่พบข้อมูลป้าย';
         String priceDisplay = 'ไม่พบราคา';
@@ -910,6 +916,128 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       }
     } catch (e) {
       _showResultDialog('เกิดข้อผิดพลาด', '$e', isSuccess: false);
+    }
+  }
+
+  /// Build and submit EMV Transaction (fire-and-forget after main transaction)
+  Future<void> _submitEmvTransaction(
+    TransactionRequest originalPayload, {
+    int? routeId,
+  }) async {
+    try {
+      final firstTxn = originalPayload.transactions.first;
+
+      // Get nearest bus stops for tap-in & tap-out
+      final tapInStop = await _dbHelper.getNearestBusStop(
+        firstTxn.tapInLoc.lat,
+        firstTxn.tapInLoc.lng,
+        routeId: routeId,
+      );
+      final tapOutStop = await _dbHelper.getNearestBusStop(
+        firstTxn.tapOutLoc.lat,
+        firstTxn.tapOutLoc.lng,
+        routeId: routeId,
+      );
+
+      // Get active bus trip for fare info
+      final activeBusTrip = await _dbHelper.getActiveBusTrip();
+
+      // Calculate fare
+      double fareAmount = 0.0;
+      if (tapInStop != null && tapOutStop != null) {
+        fareAmount =
+            await _dbHelper.getFare(
+              tapInStop.seq,
+              tapOutStop.seq,
+              routeId: routeId,
+            ) ??
+            0.0;
+      }
+
+      // GPS data
+      final gpsBoxId = _currentGpsData?.box ?? '';
+      final gpsRecDatetime =
+          _currentGpsData?.rec?.toUtc().toIso8601String() ??
+          DateTime.now().toUtc().toIso8601String();
+      final gpsSpeed = _currentGpsData?.spd ?? 0.0;
+
+      // Build EmvTapLocation for tap-in
+      final emvTapInLoc = EmvTapLocation(
+        latitude: firstTxn.tapInLoc.lat,
+        longitude: firstTxn.tapInLoc.lng,
+        busstopId: tapInStop?.busstopId ?? 0,
+        busstopName: tapInStop?.busstopDesc ?? '',
+        busstopLatitude: tapInStop?.latitude ?? 0.0,
+        busstopLongitude: tapInStop?.longitude ?? 0.0,
+        busstopDistance: 0.0,
+        gpsbusstopName: tapInStop?.busstopDesc ?? '',
+        gpsbusstopLatitude: tapInStop?.latitude ?? 0.0,
+        gpsbusstopLongitude: tapInStop?.longitude ?? 0.0,
+        gpsBoxId: gpsBoxId,
+        gpsRecDatetime: gpsRecDatetime,
+        gpsSpeed: gpsSpeed,
+      );
+
+      // Build EmvTapLocation for tap-out
+      final emvTapOutLoc = EmvTapLocation(
+        latitude: firstTxn.tapOutLoc.lat,
+        longitude: firstTxn.tapOutLoc.lng,
+        busstopId: tapOutStop?.busstopId ?? 0,
+        busstopName: tapOutStop?.busstopDesc ?? '',
+        busstopLatitude: tapOutStop?.latitude ?? 0.0,
+        busstopLongitude: tapOutStop?.longitude ?? 0.0,
+        busstopDistance: 0.0,
+        gpsbusstopName: tapOutStop?.busstopDesc ?? '',
+        gpsbusstopLatitude: tapOutStop?.latitude ?? 0.0,
+        gpsbusstopLongitude: tapOutStop?.longitude ?? 0.0,
+        gpsBoxId: gpsBoxId,
+        gpsRecDatetime: gpsRecDatetime,
+        gpsSpeed: gpsSpeed,
+      );
+
+      // Build EmvFareInfo
+      final emvFareInfo = EmvFareInfo(
+        bustripId: activeBusTrip?.id ?? 0,
+        routeId: activeBusTrip?.routeId ?? routeId ?? 0,
+        buslineId: activeBusTrip?.buslineId ?? 0,
+        businfoId: activeBusTrip?.businfoId ?? 0,
+        busNo: activeBusTrip?.busno ?? '',
+        isMorning: false,
+        isExpress: false,
+        morningAmount: 0.0,
+        expressAmount: 0.0,
+        fareAmount: fareAmount,
+        totalAmount: fareAmount,
+      );
+
+      // Build EmvTransactionItem
+      final emvTxnItem = EmvTransactionItem(
+        txnId: firstTxn.txnId,
+        assetId: firstTxn.assetId,
+        assetType: 'EMV',
+        tapInTime: firstTxn.tapInTime,
+        tapInLoc: emvTapInLoc,
+        tapOutTime: firstTxn.tapOutTime,
+        tapOutLoc: emvTapOutLoc,
+        fareInfo: emvFareInfo,
+      );
+
+      // Build request
+      final emvRequest = EmvTransactionRequest(
+        deviceId: originalPayload.deviceId,
+        plateNo: originalPayload.plateNo,
+        transactions: [emvTxnItem],
+      );
+
+      // Fire and forget — don't block UI
+      final success = await _emvTransactionService.submitEmvTransaction(
+        emvRequest,
+      );
+      debugPrint(
+        '[DEBUG] 💳 EMV Transaction ${success ? "✅ succeeded" : "❌ failed"}',
+      );
+    } catch (e) {
+      debugPrint('[DEBUG] ❌ Error in _submitEmvTransaction: $e');
     }
   }
 

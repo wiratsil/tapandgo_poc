@@ -280,4 +280,20 @@ class DatabaseHelper {
     }
     return null;
   }
+
+  /// Get the active bus trip (actualDatetimeToDestination is NULL)
+  Future<BusTrip?> getActiveBusTrip() async {
+    final db = await database;
+    final List<Map<String, dynamic>> maps = await db.rawQuery('''
+      SELECT * FROM bus_trips
+      WHERE actualDatetimeToDestination IS NULL
+        AND actualDatetimeFromSource IS NOT NULL
+      ORDER BY actualDatetimeFromSource DESC
+      LIMIT 1
+    ''');
+    if (maps.isNotEmpty) {
+      return BusTrip.fromJson(maps.first);
+    }
+    return null;
+  }
 }
