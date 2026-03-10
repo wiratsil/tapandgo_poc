@@ -151,9 +151,17 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   String _plateNumber = '';
   String _timeString = '00:00';
   String _currentStation = 'กำลังค้นหาสถานี...';
+  int? _currentStationSeq;
+  double? _currentStationDistance;
   String _nextStation = '';
+  int? _nextStationSeq;
+  double? _nextStationDistance;
   bool _isGpsUpdating = false;
   Timer? _gpsUpdateTimer;
+  bool _isPlateChanging = false;
+  String _plateChangeStatus = '';
+  List<String> _plateChangeErrors = [];
+  bool _isAppDisabled = false;
   Timer? _timer;
 
   Widget _buildLoadingUI() {
@@ -311,7 +319,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
           if (mounted) {
             setState(() => _isGpsUpdating = true);
             _gpsUpdateTimer?.cancel();
-            _gpsUpdateTimer = Timer(const Duration(milliseconds: 500), () {
+            _gpsUpdateTimer = Timer(const Duration(seconds: 2), () {
               if (mounted) setState(() => _isGpsUpdating = false);
             });
           }
@@ -323,9 +331,20 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
             if (mounted) {
               setState(() {
-                _currentStation = nearestStop != null
-                    ? '${nearestStop.busstopDesc} (${nearestStop.seq})'
-                    : 'ไม่พบข้อมูลป้าย';
+                if (nearestStop != null) {
+                  _currentStation = nearestStop.busstopDesc;
+                  _currentStationSeq = nearestStop.seq;
+                  _currentStationDistance = _haversineDistance(
+                    gpsData.lat,
+                    gpsData.lng,
+                    nearestStop.latitude,
+                    nearestStop.longitude,
+                  );
+                } else {
+                  _currentStation = 'ไม่พบข้อมูลป้าย';
+                  _currentStationSeq = null;
+                  _currentStationDistance = null;
+                }
               });
             }
 
@@ -338,9 +357,20 @@ class _WelcomeScreenState extends State<WelcomeScreen>
               );
               if (mounted) {
                 setState(() {
-                  _nextStation = nextStop != null
-                      ? '${nextStop.busstopDesc} (${nextStop.seq})'
-                      : 'สิ้นสุดเส้นทาง';
+                  if (nextStop != null) {
+                    _nextStation = nextStop.busstopDesc;
+                    _nextStationSeq = nextStop.seq;
+                    _nextStationDistance = _haversineDistance(
+                      gpsData.lat,
+                      gpsData.lng,
+                      nextStop.latitude,
+                      nextStop.longitude,
+                    );
+                  } else {
+                    _nextStation = 'สิ้นสุดเส้นทาง';
+                    _nextStationSeq = null;
+                    _nextStationDistance = null;
+                  }
                 });
               }
             }
@@ -1599,15 +1629,36 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                             ),
                                             overflow: TextOverflow.ellipsis,
                                           ),
-                                          if (_nextStation.isNotEmpty)
+                                          if (_currentStationDistance != null &&
+                                              _currentStationSeq != null)
+                                            Text(
+                                              'ป้ายที่: $_currentStationSeq | ระยะห่าง: ${_currentStationDistance!.toStringAsFixed(0)} เมตร',
+                                              style: TextStyle(
+                                                color: Colors.white70,
+                                                fontSize: 13,
+                                              ),
+                                            ),
+                                          SizedBox(height: 4),
+                                          if (_nextStation.isNotEmpty) ...[
                                             Text(
                                               'สถานีถัดไป: $_nextStation',
                                               style: TextStyle(
                                                 color: Colors.white70,
                                                 fontSize: 14,
+                                                fontWeight: FontWeight.w500,
                                               ),
                                               overflow: TextOverflow.ellipsis,
                                             ),
+                                            if (_nextStationDistance != null &&
+                                                _nextStationSeq != null)
+                                              Text(
+                                                'ป้ายที่: $_nextStationSeq | ระยะห่าง: ${_nextStationDistance!.toStringAsFixed(0)} เมตร',
+                                                style: TextStyle(
+                                                  color: Colors.white54,
+                                                  fontSize: 13,
+                                                ),
+                                              ),
+                                          ],
                                         ],
                                       ),
                                     ),
@@ -1903,6 +1954,76 @@ class _WelcomeScreenState extends State<WelcomeScreen>
               ),
             ),
           ),
+
+          // === Loading overlay during plate change ===
+          if (_isPlateChanging)
+            Container(
+              color: Colors.black87,
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(
+                      color: Colors.white,
+                      strokeWidth: 3,
+                    ),
+                    SizedBox(height: 24),
+                    Text(
+                      _plateChangeStatus,
+                      style: TextStyle(color: Colors.white, fontSize: 18),
+                      textAlign: TextAlign.center,
+                    ),
+                    SizedBox(height: 8),
+                    Text(
+                      'กรุณารอสักครู่...',
+                      style: TextStyle(color: Colors.white54, fontSize: 14),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          // === Disabled overlay when data is incomplete ===
+          if (_isAppDisabled && !_isPlateChanging)
+            Container(
+              color: Colors.black54,
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.warning_amber_rounded,
+                      color: Colors.amber,
+                      size: 64,
+                    ),
+                    SizedBox(height: 16),
+                    Text(
+                      'ข้อมูลไม่ครบสมบูรณ์',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    SizedBox(height: 8),
+                    Text(
+                      'กรุณาแก้ไขทะเบียนเพื่อดึงข้อมูลใหม่',
+                      style: TextStyle(color: Colors.white70, fontSize: 14),
+                    ),
+                    SizedBox(height: 24),
+                    ElevatedButton.icon(
+                      icon: Icon(Icons.refresh),
+                      label: Text('แก้ไขทะเบียน'),
+                      onPressed: _showEditPlateDialog,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.amber,
+                        foregroundColor: Colors.black,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -1953,52 +2074,10 @@ class _WelcomeScreenState extends State<WelcomeScreen>
               onPressed: () async {
                 if (controller.text.isNotEmpty &&
                     controller.text != _plateNumber) {
-                  // Close dialog first
                   Navigator.of(context).pop();
-
-                  // Show loading UI
-                  setState(() {
-                    _plateNumber = controller.text;
-                    _isLoading = true;
-
-                    // Clear all stale state from previous plate
-                    _gpsHistory.clear();
-                    _pendingEmvRequests.clear();
-                    _pendingTapInGpsQueue.clear();
-                    _resolvedTapInGps.clear();
-                    _pendingTransactions.clear();
-                    _currentGpsData = null;
-                  });
-
-                  // Save to SharedPreferences
-                  final prefs = await SharedPreferences.getInstance();
-                  await prefs.setString('plate_number', _plateNumber);
-                  await _savePendingTransactions(); // persist cleared transactions
-
-                  // Connect MQTT to the new plate number
-                  _mqttService.connect(_plateNumber);
-
-                  // Trigger a new data sync for the new plate number
-                  try {
-                    await _syncData();
-                  } catch (e) {
-                    debugPrint('[DEBUG] ❌ Sync error after plate change: $e');
-                  }
-
-                  // Hide loading UI
-                  if (mounted) {
-                    setState(() {
-                      _isLoading = false;
-                    });
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('อัปเดตข้อมูลสำหรับรถคันใหม่เรียบร้อย'),
-                        backgroundColor: Colors.green,
-                      ),
-                    );
-                  }
+                  await _performPlateChange(controller.text);
                 } else {
-                  if (mounted) Navigator.of(context).pop();
+                  Navigator.of(context).pop();
                 }
               },
               child: const Text('บันทึก'),
@@ -2007,6 +2086,182 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         );
       },
     );
+  }
+
+  /// Full plate change flow with loading overlay
+  Future<void> _performPlateChange(String newPlate) async {
+    setState(() {
+      _isPlateChanging = true;
+      _plateChangeStatus = 'กำลังเตรียมข้อมูล...';
+      _plateChangeErrors.clear();
+      _isAppDisabled = false;
+    });
+
+    // Step 1: Clear old data
+    setState(() => _plateChangeStatus = 'กำลังล้างข้อมูลเก่า...');
+    await Future.delayed(const Duration(milliseconds: 300));
+    setState(() {
+      _plateNumber = newPlate;
+      _gpsHistory.clear();
+      _pendingEmvRequests.clear();
+      _pendingTapInGpsQueue.clear();
+      _resolvedTapInGps.clear();
+      _pendingTransactions.clear();
+      _currentGpsData = null;
+      _currentStation = 'กำลังค้นหาสถานี...';
+      _currentStationSeq = null;
+      _nextStation = '';
+      _nextStationSeq = null;
+    });
+
+    // Step 2: Save to SharedPreferences
+    setState(() => _plateChangeStatus = 'กำลังบันทึกทะเบียน...');
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('plate_number', _plateNumber);
+      await _savePendingTransactions();
+    } catch (e) {
+      _plateChangeErrors.add('❌ บันทึกทะเบียนล้มเหลว: $e');
+      debugPrint('[PLATE] ❌ Save prefs error: $e');
+    }
+
+    // Step 3: Connect MQTT
+    setState(() => _plateChangeStatus = 'กำลังเชื่อมต่อ MQTT ($newPlate)...');
+    try {
+      final mqttResult = await _mqttService.connect(_plateNumber);
+      if (!mqttResult) {
+        _plateChangeErrors.add('⚠️ เชื่อมต่อ MQTT ไม่สำเร็จ');
+        debugPrint('[PLATE] ⚠️ MQTT connect failed');
+      }
+    } catch (e) {
+      _plateChangeErrors.add('❌ เชื่อมต่อ MQTT ล้มเหลว: $e');
+      debugPrint('[PLATE] ❌ MQTT error: $e');
+    }
+
+    // Step 4: Sync data
+    setState(() => _plateChangeStatus = 'กำลังดาวน์โหลดข้อมูลเส้นทาง...');
+    bool syncSuccess = false;
+    try {
+      final syncService = DataSyncService();
+      syncSuccess = await syncService.syncAllData(plateNo: _plateNumber);
+      if (!syncSuccess) {
+        _plateChangeErrors.add('❌ ดึงข้อมูลเส้นทางไม่สำเร็จ');
+        debugPrint('[PLATE] ❌ syncAllData returned false');
+      }
+    } catch (e) {
+      _plateChangeErrors.add('❌ ดึงข้อมูลเส้นทางล้มเหลว: $e');
+      debugPrint('[PLATE] ❌ Sync error: $e');
+    }
+
+    // Step 5: Verify data completeness
+    setState(() => _plateChangeStatus = 'กำลังตรวจสอบข้อมูล...');
+    try {
+      final db = await _dbHelper.database;
+      final routeCount =
+          Sqflite.firstIntValue(
+            await db.rawQuery('SELECT COUNT(*) FROM route_details'),
+          ) ??
+          0;
+      final priceCount =
+          Sqflite.firstIntValue(
+            await db.rawQuery('SELECT COUNT(*) FROM price_ranges'),
+          ) ??
+          0;
+      final tripCount =
+          Sqflite.firstIntValue(
+            await db.rawQuery('SELECT COUNT(*) FROM bus_trips'),
+          ) ??
+          0;
+
+      debugPrint(
+        '[PLATE] 📊 Data check: routes=$routeCount prices=$priceCount trips=$tripCount',
+      );
+
+      if (routeCount == 0)
+        _plateChangeErrors.add('⚠️ ไม่พบข้อมูลเส้นทาง (route_details)');
+      if (priceCount == 0)
+        _plateChangeErrors.add('⚠️ ไม่พบข้อมูลราคา (price_ranges)');
+      if (tripCount == 0)
+        _plateChangeErrors.add('⚠️ ไม่พบข้อมูลเที่ยวรถ (bus_trips)');
+    } catch (e) {
+      _plateChangeErrors.add('❌ ตรวจสอบข้อมูลล้มเหลว: $e');
+    }
+
+    // Done — show result
+    if (_plateChangeErrors.isNotEmpty) {
+      setState(() {
+        _isPlateChanging = false;
+        _isAppDisabled = true;
+      });
+
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            title: Row(
+              children: [
+                Icon(Icons.error_outline, color: Colors.red),
+                SizedBox(width: 8),
+                Text('เกิดข้อผิดพลาด'),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'ทะเบียน: $newPlate',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                SizedBox(height: 12),
+                ..._plateChangeErrors.map(
+                  (e) => Padding(
+                    padding: EdgeInsets.only(bottom: 4),
+                    child: Text(e, style: TextStyle(fontSize: 13)),
+                  ),
+                ),
+                SizedBox(height: 12),
+                Text(
+                  'ระบบไม่สามารถใช้งานได้จนกว่าข้อมูลจะครบสมบูรณ์\nกรุณาลองใหม่อีกครั้ง',
+                  style: TextStyle(color: Colors.red, fontSize: 13),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.of(ctx).pop();
+                  _showEditPlateDialog(); // let user change plate
+                },
+                child: Text('เปลี่ยนทะเบียน'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.of(ctx).pop();
+                  _performPlateChange(newPlate); // retry
+                },
+                child: Text('ลองใหม่'),
+              ),
+            ],
+          ),
+        );
+      }
+    } else {
+      setState(() {
+        _isPlateChanging = false;
+        _isAppDisabled = false;
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('อัปเดตข้อมูลสำหรับ $newPlate เรียบร้อย ✅'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    }
   }
 }
 
