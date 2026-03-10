@@ -182,6 +182,30 @@ class DatabaseHelper {
     return null;
   }
 
+  /// Get the next bus stop by sequence number
+  Future<RouteDetail?> getNextBusStop(int currentSeq, {int? routeId}) async {
+    final db = await database;
+    String whereClause = 'WHERE seq > ?';
+    List<dynamic> args = [currentSeq];
+
+    if (routeId != null) {
+      whereClause += ' AND routeId = ?';
+      args.add(routeId);
+    }
+
+    final List<Map<String, dynamic>> maps = await db.rawQuery('''
+      SELECT * FROM route_details
+      $whereClause
+      ORDER BY seq ASC
+      LIMIT 1
+    ''', args);
+
+    if (maps.isNotEmpty) {
+      return RouteDetail.fromJson(maps.first);
+    }
+    return null;
+  }
+
   // Fare Calculation Logic
   // Step 1: กรอง — routeDetailStartSeq <= tapInSeq AND routeDetailEndSeq >= tapOutSeq
   // Step 2: เลือก — startSeq ใกล้ tapIn ที่สุด (primary) → endSeq ใกล้ tapOut ที่สุด (secondary)

@@ -151,6 +151,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   String _plateNumber = '';
   String _timeString = '00:00';
   String _currentStation = 'กำลังค้นหาสถานี...';
+  String _nextStation = '';
+  bool _isGpsUpdating = false;
+  Timer? _gpsUpdateTimer;
   Timer? _timer;
 
   Widget _buildLoadingUI() {
@@ -304,6 +307,14 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
         // Update current station based on new GPS data
         if (gpsData.lat != 0.0 && gpsData.lng != 0.0) {
+          // Flash GPS update indicator
+          if (mounted) {
+            setState(() => _isGpsUpdating = true);
+            _gpsUpdateTimer?.cancel();
+            _gpsUpdateTimer = Timer(const Duration(milliseconds: 500), () {
+              if (mounted) setState(() => _isGpsUpdating = false);
+            });
+          }
           try {
             final nearestStop = await _dbHelper.getNearestBusStop(
               gpsData.lat,
@@ -312,8 +323,26 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
             if (mounted) {
               setState(() {
-                _currentStation = nearestStop?.busstopDesc ?? 'ไม่พบข้อมูลป้าย';
+                _currentStation = nearestStop != null
+                    ? '${nearestStop.busstopDesc} (${nearestStop.seq})'
+                    : 'ไม่พบข้อมูลป้าย';
               });
+            }
+
+            // Fetch next station
+            if (nearestStop != null) {
+              final routeId = await _dbHelper.getFirstRouteId();
+              final nextStop = await _dbHelper.getNextBusStop(
+                nearestStop.seq,
+                routeId: routeId,
+              );
+              if (mounted) {
+                setState(() {
+                  _nextStation = nextStop != null
+                      ? '${nextStop.busstopDesc} (${nextStop.seq})'
+                      : 'สิ้นสุดเส้นทาง';
+                });
+              }
             }
           } catch (e) {
             debugPrint('[DEBUG] ❌ Error finding nearest stop for UI: $e');
@@ -1556,14 +1585,41 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                       size: 20,
                                     ),
                                     SizedBox(width: 8),
-                                    Text(
-                                      'สถานีปัจจุบัน: $_currentStation',
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w500,
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            'สถานีปัจจุบัน: $_currentStation',
+                                            style: TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                          if (_nextStation.isNotEmpty)
+                                            Text(
+                                              'สถานีถัดไป: $_nextStation',
+                                              style: TextStyle(
+                                                color: Colors.white70,
+                                                fontSize: 14,
+                                              ),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                        ],
                                       ),
                                     ),
+                                    if (_isGpsUpdating)
+                                      SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: Colors.greenAccent,
+                                        ),
+                                      ),
                                   ],
                                 ),
                               ),
