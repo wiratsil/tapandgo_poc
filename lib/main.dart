@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/services.dart';
 import 'dart:io';
 import 'dart:ui';
@@ -125,6 +126,26 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       }
     }
     return closest;
+  }
+
+  /// คำนวณระยะห่างระหว่าง 2 จุด (เมตร) ด้วย Haversine formula
+  double _haversineDistance(
+    double lat1,
+    double lng1,
+    double lat2,
+    double lng2,
+  ) {
+    const R = 6371000.0; // รัศมีโลก (เมตร)
+    final dLat = (lat2 - lat1) * 3.141592653589793 / 180;
+    final dLng = (lng2 - lng1) * 3.141592653589793 / 180;
+    final a =
+        sin(dLat / 2) * sin(dLat / 2) +
+        cos(lat1 * 3.141592653589793 / 180) *
+            cos(lat2 * 3.141592653589793 / 180) *
+            sin(dLng / 2) *
+            sin(dLng / 2);
+    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    return R * c;
   }
 
   String _plateNumber = '';
@@ -773,7 +794,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     );
     debugPrint('[DEBUG] 📊 Price Ranges Count: $count');
 
-    final tapInTime = _currentGpsData?.rec ?? DateTime.now().toUtc();
+    final tapInTime = _currentGpsData?.rec ?? DateTime.now();
 
     final pending = PendingTransaction(
       aid: qrData.aid,
@@ -855,7 +876,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     }
 
     final pending = _pendingTransactions[qrData.aid]!;
-    final tapOutTime = _currentGpsData?.rec ?? DateTime.now().toUtc();
+    final tapOutTime = _currentGpsData?.rec ?? DateTime.now();
 
     // Get current location for Tap Out (from MQTT GPS)
     var lat = _currentGpsData?.lat ?? 0.0;
@@ -880,9 +901,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       txnId: _uuid.v4(),
       assetId: qrData.aid,
       assetType: 'QR',
-      tapInTime: pending.tapInTime.toUtc().toIso8601String(),
+      tapInTime: pending.tapInTime.toIso8601String(),
       tapInLoc: pending.tapInLoc,
-      tapOutTime: tapOutTime.toUtc().toIso8601String(),
+      tapOutTime: tapOutTime.toIso8601String(),
       tapOutLoc: tapOutLoc,
     );
 
@@ -1192,41 +1213,69 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         '[EMV] 💰 Fare: $fareAmount (tapInSeq=${tapInStop?.seq}, tapOutSeq=${tapOutStop?.seq})',
       );
 
+      // --- Device GPS (เครื่อง POS) ---
+      double? deviceLat;
+      double? deviceLng;
+      try {
+        final locStr = await _cpaySdkPlugin.getLocation().timeout(
+          const Duration(seconds: 3),
+          onTimeout: () => null,
+        );
+        if (locStr != null && locStr.contains(',')) {
+          final parts = locStr.split(',');
+          deviceLat = double.tryParse(parts[0]);
+          deviceLng = double.tryParse(parts[1]);
+        }
+      } catch (e) {
+        debugPrint('[EMV] ⚠️ Device GPS unavailable: $e');
+      }
+      debugPrint('[EMV] 📱 Device GPS: lat=$deviceLat, lng=$deviceLng');
+
       // Build EmvTapLocation for tap-in
+      final tapInBusstopDist = _haversineDistance(
+        tapInGpsLat,
+        tapInGpsLng,
+        tapInStop?.latitude ?? 0.0,
+        tapInStop?.longitude ?? 0.0,
+      );
       final emvTapInLoc = EmvTapLocation(
-        latitude: tapInGpsLat,
-        longitude: tapInGpsLng,
-        busstopId: tapInStop?.busstopId ?? 0,
-        busstopName: tapInStop?.busstopDesc ?? '',
-        busstopLatitude: tapInStop?.latitude ?? 0.0,
-        busstopLongitude: tapInStop?.longitude ?? 0.0,
-        busstopDistance: 0.0,
-        gpsbusstopName: tapInStop?.busstopDesc ?? '',
-        gpsbusstopLatitude: tapInStop?.latitude ?? 0.0,
-        gpsbusstopLongitude: tapInStop?.longitude ?? 0.0,
+        latitude: deviceLat, // GPS เครื่อง POS (null ถ้าดึงไม่ได้)
+        longitude: deviceLng, // GPS เครื่อง POS
+        busstopId: tapInStop?.busstopId ?? 0, // master data BMS
+        busstopName: tapInStop?.busstopDesc ?? '', // master data BMS
+        busstopLatitude: tapInStop?.latitude ?? 0.0, // master data BMS
+        busstopLongitude: tapInStop?.longitude ?? 0.0, // master data BMS
+        busstopDistance: tapInBusstopDist, // ระยะห่าง MQTT GPS <-> bus stop
+        gpsbusstopName: tapInStop?.busstopDesc ?? '', // ป้ายใกล้สุดจาก MQTT GPS
+        gpsbusstopLatitude: tapInGpsLat, // MQTT GPS lat
+        gpsbusstopLongitude: tapInGpsLng, // MQTT GPS lng
         gpsBoxId: tapInGps?.box ?? '',
         gpsRecDatetime:
-            tapInGps?.rec?.toUtc().toIso8601String() ??
-            tapInTime.toIso8601String(),
+            tapInGps?.rec?.toIso8601String() ?? tapInTime.toIso8601String(),
         gpsSpeed: tapInGps?.spd ?? 0.0,
       );
 
       // Build EmvTapLocation for tap-out
+      final tapOutBusstopDist = _haversineDistance(
+        tapOutGpsLat,
+        tapOutGpsLng,
+        tapOutStop?.latitude ?? 0.0,
+        tapOutStop?.longitude ?? 0.0,
+      );
       final emvTapOutLoc = EmvTapLocation(
-        latitude: tapOutGpsLat,
-        longitude: tapOutGpsLng,
+        latitude: deviceLat, // GPS เครื่อง POS
+        longitude: deviceLng, // GPS เครื่อง POS
         busstopId: tapOutStop?.busstopId ?? 0,
         busstopName: tapOutStop?.busstopDesc ?? '',
         busstopLatitude: tapOutStop?.latitude ?? 0.0,
         busstopLongitude: tapOutStop?.longitude ?? 0.0,
-        busstopDistance: 0.0,
+        busstopDistance: tapOutBusstopDist,
         gpsbusstopName: tapOutStop?.busstopDesc ?? '',
-        gpsbusstopLatitude: tapOutStop?.latitude ?? 0.0,
-        gpsbusstopLongitude: tapOutStop?.longitude ?? 0.0,
+        gpsbusstopLatitude: tapOutGpsLat, // MQTT GPS lat
+        gpsbusstopLongitude: tapOutGpsLng, // MQTT GPS lng
         gpsBoxId: tapOutGps?.box ?? '',
         gpsRecDatetime:
-            tapOutGps?.rec?.toUtc().toIso8601String() ??
-            tapOutTime.toIso8601String(),
+            tapOutGps?.rec?.toIso8601String() ?? tapOutTime.toIso8601String(),
         gpsSpeed: tapOutGps?.spd ?? 0.0,
       );
 
@@ -1340,6 +1389,27 @@ class _WelcomeScreenState extends State<WelcomeScreen>
             errorMessage: message,
           ),
         ),
+      );
+    }
+  }
+
+  // ============ Debug Simulate ============
+  void _simulateTap({required bool isTapOut}) {
+    const simulatedAid = 'SIM-CARD-001';
+    final qrData = QrData(aid: simulatedAid, bal: 100.00);
+
+    if (isTapOut && _pendingTransactions.containsKey(simulatedAid)) {
+      debugPrint('[SIM] 🟡 Simulating TAP-OUT for $simulatedAid');
+      _handleTapOut(qrData);
+    } else if (!isTapOut) {
+      debugPrint('[SIM] 🟢 Simulating TAP-IN for $simulatedAid');
+      _handleTapIn(qrData);
+    } else {
+      debugPrint('[SIM] ⚠️ No pending tap-in found for $simulatedAid');
+      _showResultDialog(
+        'ไม่มีข้อมูลแตะขึ้น',
+        'กรุณากดจำลองแตะขึ้นก่อน',
+        isSuccess: false,
       );
     }
   }
@@ -1592,6 +1662,56 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                   fontSize: 18,
                                 ),
                               ),
+
+                              // === Debug Simulate Buttons ===
+                              const SizedBox(height: 20),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  ElevatedButton.icon(
+                                    onPressed: () =>
+                                        _simulateTap(isTapOut: false),
+                                    icon: const Icon(Icons.login, size: 18),
+                                    label: const Text('จำลองแตะขึ้น'),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.green.shade700,
+                                      foregroundColor: Colors.white,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 16,
+                                        vertical: 10,
+                                      ),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(20),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  ElevatedButton.icon(
+                                    onPressed:
+                                        _pendingTransactions.containsKey(
+                                          'SIM-CARD-001',
+                                        )
+                                        ? () => _simulateTap(isTapOut: true)
+                                        : null,
+                                    icon: const Icon(Icons.logout, size: 18),
+                                    label: const Text('จำลองแตะลง'),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.red.shade700,
+                                      foregroundColor: Colors.white,
+                                      disabledBackgroundColor:
+                                          Colors.grey.shade600,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 16,
+                                        vertical: 10,
+                                      ),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(20),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+
                               const Spacer(),
 
                               // Bottom Status Indicators

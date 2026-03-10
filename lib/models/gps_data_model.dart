@@ -18,11 +18,7 @@ class GpsData {
       box: json['box']?.toString() ?? '',
       lat: (json['lat'] ?? 0.0).toDouble(),
       lng: (json['lng'] ?? 0.0).toDouble(),
-      rec: json['rec'] != null
-          ? DateTime.tryParse(
-              json['rec'],
-            )?.toUtc().add(const Duration(hours: 7))
-          : null,
+      rec: json['rec'] != null ? DateTime.tryParse(json['rec']) : null,
       spd: (json['spd'] ?? 0.0).toDouble(),
     );
   }

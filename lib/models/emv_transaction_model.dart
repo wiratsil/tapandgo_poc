@@ -1,22 +1,22 @@
 /// Location data for EMV tap (with bus stop + GPS box details)
 class EmvTapLocation {
-  final double latitude;
-  final double longitude;
-  final int busstopId;
-  final String busstopName;
-  final double busstopLatitude;
-  final double busstopLongitude;
-  final double busstopDistance;
-  final String gpsbusstopName;
-  final double gpsbusstopLatitude;
-  final double gpsbusstopLongitude;
+  final double? latitude; // GPS จากเครื่อง POS (null ถ้าดึงไม่ได้)
+  final double? longitude; // GPS จากเครื่อง POS (null ถ้าดึงไม่ได้)
+  final int busstopId; // master data BMS (route_details)
+  final String busstopName; // master data BMS (route_details)
+  final double busstopLatitude; // master data BMS (route_details)
+  final double busstopLongitude; // master data BMS (route_details)
+  final double busstopDistance; // คำนวณระยะห่าง gps_busstop <-> busstop
+  final String gpsbusstopName; // GPS จาก morgan (MQTT) → ชื่อป้ายใกล้สุด
+  final double gpsbusstopLatitude; // GPS จาก morgan (MQTT) → lat
+  final double gpsbusstopLongitude; // GPS จาก morgan (MQTT) → lng
   final String gpsBoxId;
   final String gpsRecDatetime;
   final double gpsSpeed;
 
   EmvTapLocation({
-    required this.latitude,
-    required this.longitude,
+    this.latitude,
+    this.longitude,
     required this.busstopId,
     required this.busstopName,
     required this.busstopLatitude,
