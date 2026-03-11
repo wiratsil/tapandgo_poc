@@ -148,6 +148,12 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     return R * c;
   }
 
+  /// Format DateTime to "yyyy-MM-dd HH:mm:ss"
+  String _formatDateTime(DateTime dt) {
+    String pad(int n) => n.toString().padLeft(2, '0');
+    return '${dt.year}-${pad(dt.month)}-${pad(dt.day)} ${pad(dt.hour)}:${pad(dt.minute)}:${pad(dt.second)}';
+  }
+
   String _plateNumber = '';
   String _timeString = '00:00';
   String _currentStation = 'กำลังค้นหาสถานี...';
@@ -853,7 +859,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     );
     debugPrint('[DEBUG] 📊 Price Ranges Count: $count');
 
-    final tapInTime = _currentGpsData?.rec ?? DateTime.now();
+    final tapInTime = DateTime.now();
 
     final pending = PendingTransaction(
       aid: qrData.aid,
@@ -935,7 +941,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     }
 
     final pending = _pendingTransactions[qrData.aid]!;
-    final tapOutTime = _currentGpsData?.rec ?? DateTime.now();
+    final tapOutTime = DateTime.now();
 
     // Get current location for Tap Out (from MQTT GPS)
     var lat = _currentGpsData?.lat ?? 0.0;
@@ -960,9 +966,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       txnId: _uuid.v4(),
       assetId: qrData.aid,
       assetType: 'QR',
-      tapInTime: pending.tapInTime.toIso8601String(),
+      tapInTime: _formatDateTime(pending.tapInTime),
       tapInLoc: pending.tapInLoc,
-      tapOutTime: tapOutTime.toIso8601String(),
+      tapOutTime: _formatDateTime(tapOutTime),
       tapOutLoc: tapOutLoc,
     );
 
@@ -1478,6 +1484,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   Widget build(BuildContext context) {
     if (_isLoading) {
       return Scaffold(
+        resizeToAvoidBottomInset: false,
         backgroundColor: Colors.white,
         body: Stack(
           children: [
@@ -1498,6 +1505,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     }
 
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       body: Stack(
         children: [
           Container(
@@ -2057,30 +2065,59 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       builder: (context) {
         return AlertDialog(
           title: const Text('แก้ไขหมายเลขทะเบียนรถ'),
-          content: TextField(
-            controller: controller,
-            decoration: const InputDecoration(
-              labelText: 'หมายเลขทะเบียน',
-              hintText: 'ตัวอย่าง: 12-3456',
-              border: OutlineInputBorder(),
+          content: SingleChildScrollView(
+            child: TextField(
+              controller: controller,
+              decoration: const InputDecoration(
+                labelText: 'หมายเลขทะเบียน',
+                hintText: 'ตัวอย่าง: 12-3456',
+                border: OutlineInputBorder(),
+              ),
             ),
           ),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('ยกเลิก'),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                if (controller.text.isNotEmpty &&
-                    controller.text != _plateNumber) {
-                  Navigator.of(context).pop();
-                  await _performPlateChange(controller.text);
-                } else {
-                  Navigator.of(context).pop();
-                }
-              },
-              child: const Text('บันทึก'),
+            SizedBox(
+              width: double.maxFinite,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  TextButton(
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      minimumSize: Size.zero,
+                    ),
+                    onPressed: () async {
+                      final currentPlate = controller.text;
+                      if (currentPlate.isNotEmpty) {
+                        Navigator.of(context).pop();
+                        await _performPlateChange(currentPlate);
+                      }
+                    },
+                    child: const Text('รีเฟรช', style: TextStyle(color: Colors.blue)),
+                  ),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('ยกเลิก'),
+                      ),
+                      ElevatedButton(
+                        onPressed: () async {
+                          if (controller.text.isNotEmpty &&
+                              controller.text != _plateNumber) {
+                            Navigator.of(context).pop();
+                            await _performPlateChange(controller.text);
+                          } else {
+                            Navigator.of(context).pop();
+                          }
+                        },
+                        child: const Text('บันทึก'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ],
         );
