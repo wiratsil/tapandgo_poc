@@ -1029,7 +1029,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         // --- Queue EMV Transaction — รอ GPS ที่เวลาเลย tapOutTime ก่อนส่ง ---
         final tapOutTime = DateTime.parse(
           payload.transactions.first.tapOutTime,
-        );
+        ).toLocal();
         _pendingEmvRequests.add(
           _PendingEmvRequest(
             payload: payload,
@@ -1183,9 +1183,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         '[EMV] 🛠️ txnId: ${firstTxn.txnId}, assetId: ${firstTxn.assetId}',
       );
 
-      // Parse tap times
-      final tapInTime = DateTime.parse(firstTxn.tapInTime);
-      final tapOutTime = DateTime.parse(firstTxn.tapOutTime);
+      final tapInTime = DateTime.parse(firstTxn.tapInTime).toLocal();
+      final tapOutTime = DateTime.parse(firstTxn.tapOutTime).toLocal();
       debugPrint('[EMV] ⏱️ tapInTime: $tapInTime, tapOutTime: $tapOutTime');
 
       // --- TapIn GPS ---

@@ -52,10 +52,10 @@ class BusTrip {
       licensePlate: json['licensePlate'] ?? '',
       busno: json['busno'] ?? '',
       actualDatetimeFromSource: json['actualDatetimeFromSource'] != null
-          ? DateTime.tryParse(json['actualDatetimeFromSource'])
+          ? DateTime.tryParse(json['actualDatetimeFromSource'].toString())?.toLocal()
           : null,
       actualDatetimeToDestination: json['actualDatetimeToDestination'] != null
-          ? DateTime.tryParse(json['actualDatetimeToDestination'])
+          ? DateTime.tryParse(json['actualDatetimeToDestination'].toString())?.toLocal()
           : null,
     );
   }

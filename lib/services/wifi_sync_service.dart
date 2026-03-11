@@ -29,7 +29,7 @@ class ScanData {
 
   factory ScanData.fromJson(Map<String, dynamic> json) => ScanData(
     id: json['id'] as String,
-    timestamp: DateTime.parse(json['timestamp'] as String),
+    timestamp: DateTime.parse(json['timestamp'] as String).toLocal(),
     doorLocation: json['door_location'] as String,
     deviceId: json['device_id'] as String?,
   );
@@ -70,7 +70,7 @@ class PendingTransactionSync {
   factory PendingTransactionSync.fromJson(Map<String, dynamic> json) =>
       PendingTransactionSync(
         aid: json['aid'] as String,
-        tapInTime: DateTime.parse(json['tap_in_time'] as String),
+        tapInTime: DateTime.parse(json['tap_in_time'] as String).toLocal(),
         tapInLat: (json['tap_in_lat'] as num?)?.toDouble() ?? 0.0,
         tapInLng: (json['tap_in_lng'] as num?)?.toDouble() ?? 0.0,
         isRemove: json['is_remove'] as bool? ?? false,
