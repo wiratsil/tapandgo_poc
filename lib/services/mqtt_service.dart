@@ -29,6 +29,7 @@ class MqttService {
 
   String? _currentPlateNo;
   StreamSubscription? _updatesSubscription;
+  bool _intentionalDisconnect = false;
 
   MqttService() {
     _initializeClient();
@@ -61,18 +62,32 @@ class MqttService {
   }
 
   Future<bool> connect(String plateNo) async {
-    if (client.connectionStatus?.state == MqttConnectionState.connected &&
-        _currentPlateNo == plateNo) {
-      debugPrint('[MQTT] Already connected and subscribed to $plateNo');
-      return true;
+    _intentionalDisconnect = false;
+    
+    if (client.connectionStatus?.state == MqttConnectionState.connected) {
+      if (_currentPlateNo == plateNo) {
+        debugPrint('[MQTT] Already connected and subscribed to $plateNo');
+        return true;
+      } else {
+        debugPrint('[MQTT] Changing subscription from $_currentPlateNo to $plateNo');
+        if (_currentPlateNo != null && _currentPlateNo!.isNotEmpty) {
+          client.unsubscribe('/gps/$_currentPlateNo');
+          client.unsubscribe('/trip/$_currentPlateNo');
+        }
+        _currentPlateNo = plateNo;
+        
+        if (_currentPlateNo != null && _currentPlateNo!.isNotEmpty) {
+          client.subscribe('/gps/$_currentPlateNo', MqttQos.atLeastOnce);
+          client.subscribe('/trip/$_currentPlateNo', MqttQos.atLeastOnce);
+        }
+        return true;
+      }
     }
 
-    if (client.connectionStatus?.state == MqttConnectionState.connected ||
-        client.connectionStatus?.state == MqttConnectionState.connecting) {
-      debugPrint(
-        '[MQTT] Disconnecting previous connection for: $_currentPlateNo',
-      );
-      client.disconnect();
+    if (client.connectionStatus?.state == MqttConnectionState.connecting) {
+      debugPrint('[MQTT] Connection in progress, updating plateNo to $plateNo');
+      _currentPlateNo = plateNo;
+      return true;
     }
 
     _currentPlateNo = plateNo;
@@ -167,7 +182,8 @@ class MqttService {
   }
 
   void disconnect() {
-    debugPrint('[MQTT] Disconnecting client');
+    debugPrint('[MQTT] Disconnecting client intentionally');
+    _intentionalDisconnect = true;
     _updatesSubscription?.cancel();
     client.disconnect();
   }
@@ -178,6 +194,11 @@ class MqttService {
 
   void onDisconnected() {
     debugPrint('[MQTT] Disconnected callback invoked');
+    if (_intentionalDisconnect) {
+      debugPrint('[MQTT] Intentional disconnect, not reconnecting');
+      _intentionalDisconnect = false;
+      return;
+    }
     // Implement auto-reconnect if desired
     debugPrint('[MQTT] Attempting to reconnect in 5 seconds...');
     Future.delayed(const Duration(seconds: 5), () {
