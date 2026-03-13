@@ -10,18 +10,26 @@ import 'services/wifi_sync_service.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'models/gps_data_model.dart';
+import 'models/route_detail_model.dart';
+import 'models/price_range_model.dart';
+import 'services/database_helper.dart';
 
 /// Settings Screen - รวมข้อมูลรถ, WiFi Sync, และเกี่ยวกับแอป
 class SettingsScreen extends StatefulWidget {
   final String plateNumber;
   final int? activeRouteId;
   final Future<void> Function(String newPlate) onPlateChanged;
+  final List<GpsData> gpsHistory;
+  final Stream<GpsData>? gpsStream;
 
   const SettingsScreen({
     super.key,
     required this.plateNumber,
     this.activeRouteId,
     required this.onPlateChanged,
+    this.gpsHistory = const [],
+    this.gpsStream,
   });
 
   @override
@@ -56,6 +64,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // Current plate (can be updated from dialog)
   late String _currentPlateNumber;
 
+  // GPS History
+  late List<GpsData> _localGpsHistory;
+
+  // DB data counts
+  final DatabaseHelper _dbHelper = DatabaseHelper();
+  int _routeDetailsCount = 0;
+  int _priceRangesCount = 0;
+
   // Subscriptions
   StreamSubscription<ScanData>? _scanDataSub;
   StreamSubscription<String>? _statusSub;
@@ -66,10 +82,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void initState() {
     super.initState();
     _currentPlateNumber = widget.plateNumber;
+    _localGpsHistory = List<GpsData>.from(widget.gpsHistory);
     _loadSavedHostIp();
     _getLocalIp();
     _setupListeners();
     _loadAppInfo();
+    _loadDbCounts();
     _doorLocationController.text = _syncService.doorLocation;
 
     _doorLocationController.addListener(() {
@@ -457,6 +475,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _buildSectionHeader('ข้อมูลรถ', Icons.directions_bus, Colors.orange),
               const SizedBox(height: 8),
               _buildVehicleInfoSection(),
+              const SizedBox(height: 8),
+              _buildGpsHistoryButton(),
+              const SizedBox(height: 4),
+              _buildRouteDetailsButton(),
+              const SizedBox(height: 4),
+              _buildPriceRangesButton(),
               const SizedBox(height: 24),
 
               // ========== Section 2: WiFi Sync ==========
@@ -618,6 +642,482 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _loadDbCounts() async {
+    final rdCount = await _dbHelper.getRouteDetailsCount();
+    final prCount = await _dbHelper.getPriceRangesCount();
+    if (mounted) {
+      setState(() {
+        _routeDetailsCount = rdCount;
+        _priceRangesCount = prCount;
+      });
+    }
+  }
+
+  Widget _buildRouteDetailsButton() {
+    final hasData = _routeDetailsCount > 0;
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: InkWell(
+        onTap: hasData ? _showRouteDetailsDialog : null,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: (hasData ? Colors.indigo : Colors.grey).withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(Icons.map, color: hasData ? Colors.indigo : Colors.grey, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Route Details (ป้ายรถ)',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: hasData ? Colors.black87 : Colors.grey,
+                      ),
+                    ),
+                    Text(
+                      hasData ? '$_routeDetailsCount รายการ' : 'ยังไม่มีข้อมูล (ต้อง sync ก่อน)',
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                    ),
+                  ],
+                ),
+              ),
+              if (hasData) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.indigo.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '$_routeDetailsCount',
+                    style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.indigo, fontSize: 13),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                const Icon(Icons.chevron_right, color: Colors.grey, size: 20),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPriceRangesButton() {
+    final hasData = _priceRangesCount > 0;
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: InkWell(
+        onTap: hasData ? _showPriceRangesDialog : null,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: (hasData ? Colors.amber.shade700 : Colors.grey).withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(Icons.attach_money, color: hasData ? Colors.amber.shade700 : Colors.grey, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Price Ranges (ช่วงราคา)',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: hasData ? Colors.black87 : Colors.grey,
+                      ),
+                    ),
+                    Text(
+                      hasData ? '$_priceRangesCount รายการ' : 'ยังไม่มีข้อมูล (ต้อง sync ก่อน)',
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                    ),
+                  ],
+                ),
+              ),
+              if (hasData) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '$_priceRangesCount',
+                    style: TextStyle(fontWeight: FontWeight.bold, color: Colors.amber.shade700, fontSize: 13),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                const Icon(Icons.chevron_right, color: Colors.grey, size: 20),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showRouteDetailsDialog() async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    final data = await _dbHelper.getAllRouteDetails();
+    if (!mounted) return;
+    Navigator.pop(context); // close loading
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.map, color: Colors.indigo, size: 22),
+            const SizedBox(width: 8),
+            Expanded(child: Text('Route Details (${data.length})', style: const TextStyle(fontSize: 16))),
+          ],
+        ),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 400,
+          child: data.isEmpty
+              ? Center(child: Text('ไม่มีข้อมูล', style: TextStyle(color: Colors.grey.shade400)))
+              : ListView.builder(
+                  itemCount: data.length,
+                  itemBuilder: (ctx, i) {
+                    final rd = data[i];
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 3),
+                      child: Row(
+                        children: [
+                          SizedBox(
+                            width: 30,
+                            child: Text(
+                              '${rd.seq}',
+                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
+                            ),
+                          ),
+                          if (rd.isExpress)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                              margin: const EdgeInsets.only(right: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.red.shade50,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Text('ด่วน', style: TextStyle(fontSize: 9, color: Colors.red)),
+                            ),
+                          Expanded(
+                            child: Text(
+                              rd.busstopDesc,
+                              style: const TextStyle(fontSize: 12),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          Text(
+                            '${rd.latitude.toStringAsFixed(4)},${rd.longitude.toStringAsFixed(4)}',
+                            style: TextStyle(fontSize: 10, color: Colors.grey.shade500, fontFamily: 'monospace'),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('ปิด')),
+        ],
+      ),
+    );
+  }
+
+  void _showPriceRangesDialog() async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    final data = await _dbHelper.getAllPriceRanges();
+    if (!mounted) return;
+    Navigator.pop(context); // close loading
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.attach_money, color: Colors.amber.shade700, size: 22),
+            const SizedBox(width: 8),
+            Expanded(child: Text('Price Ranges (${data.length})', style: const TextStyle(fontSize: 16))),
+          ],
+        ),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 400,
+          child: data.isEmpty
+              ? Center(child: Text('ไม่มีข้อมูล', style: TextStyle(color: Colors.grey.shade400)))
+              : Column(
+                  children: [
+                    // Header
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Row(
+                        children: [
+                          const SizedBox(width: 70, child: Text('ช่วงป้าย', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
+                          const Expanded(child: Text('ราคา', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
+                          const SizedBox(width: 50, child: Text('กลุ่ม', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold), textAlign: TextAlign.right)),
+                        ],
+                      ),
+                    ),
+                    const Divider(height: 1),
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: data.length,
+                        itemBuilder: (ctx, i) {
+                          final pr = data[i];
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 3),
+                            child: Row(
+                              children: [
+                                SizedBox(
+                                  width: 70,
+                                  child: Text(
+                                    '${pr.routeDetailStartSeq}→${pr.routeDetailEndSeq}',
+                                    style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+                                  ),
+                                ),
+                                Expanded(
+                                  child: Text(
+                                    '฿${pr.price.toStringAsFixed(2)}',
+                                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.amber.shade800),
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: 50,
+                                  child: Text(
+                                    '${pr.priceGroupId}',
+                                    style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                                    textAlign: TextAlign.right,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('ปิด')),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGpsHistoryButton() {
+    final lastGps = _localGpsHistory.isNotEmpty ? _localGpsHistory.last : null;
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: InkWell(
+        onTap: _showGpsHistoryDialog,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.teal.withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.satellite_alt, color: Colors.teal, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'ประวัติ MQTT GPS',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                    ),
+                    Text(
+                      lastGps != null
+                          ? 'ล่าสุด: ${_formatGpsTime(lastGps.rec)} | ${lastGps.lat.toStringAsFixed(4)}, ${lastGps.lng.toStringAsFixed(4)}'
+                          : 'ยังไม่มีข้อมูล',
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.teal.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  '${_localGpsHistory.length}',
+                  style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal, fontSize: 13),
+                ),
+              ),
+              const SizedBox(width: 4),
+              const Icon(Icons.chevron_right, color: Colors.grey, size: 20),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _formatGpsTime(DateTime? dt) {
+    if (dt == null) return '-';
+    return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}:${dt.second.toString().padLeft(2, '0')}';
+  }
+
+  void _showGpsHistoryDialog() {
+    // Make a working copy so dialog can update independently
+    final dialogHistory = List<GpsData>.from(_localGpsHistory);
+    StreamSubscription<GpsData>? dialogSub;
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            // Start listening to stream on first build
+            dialogSub ??= widget.gpsStream?.listen((gps) {
+              setDialogState(() {
+                dialogHistory.add(gps);
+              });
+              // Also update parent state
+              setState(() {
+                _localGpsHistory.add(gps);
+              });
+            });
+
+            return AlertDialog(
+              title: Row(
+                children: [
+                  const Icon(Icons.satellite_alt, color: Colors.teal, size: 22),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text('ประวัติ MQTT GPS', style: TextStyle(fontSize: 16)),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.teal.shade50,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      '${dialogHistory.length}',
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.teal),
+                    ),
+                  ),
+                ],
+              ),
+              content: SizedBox(
+                width: double.maxFinite,
+                height: 400,
+                child: dialogHistory.isEmpty
+                    ? Center(
+                        child: Text('ยังไม่มีข้อมูล GPS', style: TextStyle(color: Colors.grey.shade400)),
+                      )
+                    : ListView.builder(
+                        reverse: true,
+                        itemCount: dialogHistory.length,
+                        itemBuilder: (ctx, index) {
+                          // reverse: true shows from bottom, so index 0 = last item
+                          final gps = dialogHistory[dialogHistory.length - 1 - index];
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 3),
+                            child: Row(
+                              children: [
+                                // Time
+                                SizedBox(
+                                  width: 60,
+                                  child: Text(
+                                    _formatGpsTime(gps.rec),
+                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, fontFamily: 'monospace'),
+                                  ),
+                                ),
+                                // Lat/Lng
+                                Expanded(
+                                  child: Text(
+                                    '${gps.lat.toStringAsFixed(5)}, ${gps.lng.toStringAsFixed(5)}',
+                                    style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                // Speed
+                                SizedBox(
+                                  width: 48,
+                                  child: Text(
+                                    '${gps.spd.toStringAsFixed(0)} km',
+                                    style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                                    textAlign: TextAlign.right,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+              ),
+              actions: [
+                if (dialogHistory.isNotEmpty)
+                  TextButton(
+                    onPressed: () {
+                      setDialogState(() => dialogHistory.clear());
+                      setState(() => _localGpsHistory.clear());
+                    },
+                    child: const Text('ล้าง', style: TextStyle(color: Colors.red)),
+                  ),
+                TextButton(
+                  onPressed: () {
+                    dialogSub?.cancel();
+                    Navigator.pop(ctx);
+                  },
+                  child: const Text('ปิด'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    ).then((_) {
+      dialogSub?.cancel();
+    });
   }
 
   // ============ Section 2: WiFi Sync (Compact) ============

@@ -320,4 +320,32 @@ class DatabaseHelper {
     }
     return null;
   }
+
+  /// Get all route details ordered by seq
+  Future<List<RouteDetail>> getAllRouteDetails() async {
+    final db = await database;
+    final maps = await db.rawQuery('SELECT * FROM route_details ORDER BY seq ASC');
+    return maps.map((m) => RouteDetail.fromJson(m)).toList();
+  }
+
+  /// Get all price ranges ordered by startSeq
+  Future<List<PriceRange>> getAllPriceRanges() async {
+    final db = await database;
+    final maps = await db.rawQuery('SELECT * FROM price_ranges ORDER BY routeDetailStartSeq ASC');
+    return maps.map((m) => PriceRange.fromJson(m)).toList();
+  }
+
+  /// Get count of route details
+  Future<int> getRouteDetailsCount() async {
+    final db = await database;
+    final result = await db.rawQuery('SELECT COUNT(*) as cnt FROM route_details');
+    return Sqflite.firstIntValue(result) ?? 0;
+  }
+
+  /// Get count of price ranges
+  Future<int> getPriceRangesCount() async {
+    final db = await database;
+    final result = await db.rawQuery('SELECT COUNT(*) as cnt FROM price_ranges');
+    return Sqflite.firstIntValue(result) ?? 0;
+  }
 }

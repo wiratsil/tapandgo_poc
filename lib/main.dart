@@ -1907,6 +1907,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                               onPlateChanged: (newPlate) async {
                                                 await _performPlateChange(newPlate);
                                               },
+                                              gpsHistory: _gpsHistory,
+                                              gpsStream: _mqttService.gpsStream,
                                             ),
                                           ),
                                         );
@@ -2039,6 +2041,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                               onPlateChanged: (newPlate) async {
                                 await _performPlateChange(newPlate);
                               },
+                              gpsHistory: _gpsHistory,
+                              gpsStream: _mqttService.gpsStream,
                             ),
                           ),
                         );
@@ -2235,6 +2239,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                         onPlateChanged: (newPlate) async {
                           await _performPlateChange(newPlate);
                         },
+                        gpsHistory: _gpsHistory,
+                        gpsStream: _mqttService.gpsStream,
                       ),
                     ),
                   );
