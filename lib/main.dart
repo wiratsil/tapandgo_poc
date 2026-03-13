@@ -1874,28 +1874,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                     ),
                                     const SizedBox(width: 16),
 
-                                    Container(
-                                      padding: const EdgeInsets.all(8),
-                                      decoration: BoxDecoration(
-                                        color: Colors.black.withOpacity(0.3),
-                                        borderRadius: BorderRadius.circular(20),
-                                      ),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          _buildStatusIcon(
-                                            Icons.qr_code_scanner,
-                                            true,
-                                          ),
-                                          const SizedBox(width: 16),
-                                          _buildStatusIcon(
-                                            Icons.credit_card,
-                                            true,
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    const SizedBox(width: 16),
+                                     // Removed Status Icons here
                                     // Settings Button
                                     GestureDetector(
                                       onTap: () async {
@@ -2061,23 +2040,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     );
   }
 
-  Widget _buildStatusIcon(IconData icon, bool isReady) {
-    return Stack(
-      alignment: Alignment.bottomRight,
-      children: [
-        Icon(icon, color: Colors.white70, size: 24),
-        Container(
-          width: 8,
-          height: 8,
-          decoration: BoxDecoration(
-            color: isReady ? Colors.greenAccent : Colors.red,
-            shape: BoxShape.circle,
-            border: Border.all(color: Colors.black, width: 1),
-          ),
-        ),
-      ],
-    );
-  }
+
 
   // _showEditPlateDialog() ย้ายไปหน้า SettingsScreen แล้ว
 

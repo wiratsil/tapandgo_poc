@@ -472,7 +472,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
             padding: const EdgeInsets.all(16),
             children: [
               // ========== Section 1: ข้อมูลรถ ==========
-              _buildSectionHeader('ข้อมูลรถ', Icons.directions_bus, Colors.orange),
+              _buildSectionHeader(
+                'ข้อมูลรถ',
+                Icons.directions_bus,
+                Colors.orange,
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'สถานะอุปกรณ์:',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.blueGrey,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    _buildStatusIcon(Icons.qr_code_scanner, true),
+                    const SizedBox(width: 8),
+                    _buildStatusIcon(Icons.credit_card, true),
+                  ],
+                ),
+              ),
               const SizedBox(height: 8),
               _buildVehicleInfoSection(),
               const SizedBox(height: 8),
@@ -500,7 +521,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildSectionHeader(String title, IconData icon, Color color) {
+  Widget _buildSectionHeader(String title, IconData icon, Color color, {Widget? trailing}) {
     return Row(
       children: [
         Icon(icon, color: color, size: 22),
@@ -513,6 +534,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             color: color,
           ),
         ),
+        if (trailing != null) ...[
+          const Spacer(),
+          trailing,
+        ],
       ],
     );
   }
@@ -641,6 +666,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildStatusIcon(IconData icon, bool isReady) {
+    return Stack(
+      alignment: Alignment.bottomRight,
+      children: [
+        Icon(icon, color: Colors.grey.shade700, size: 20),
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(
+            color: isReady ? Colors.green : Colors.red,
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white, width: 1.5),
+          ),
+        ),
+      ],
     );
   }
 
