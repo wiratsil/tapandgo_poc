@@ -1632,15 +1632,6 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                         crossAxisAlignment:
                                             CrossAxisAlignment.start,
                                         children: [
-                                          if (_activeRouteId != null &&
-                                              _activeRouteId != 0)
-                                            Text(
-                                              'Route ID: $_activeRouteId',
-                                              style: TextStyle(
-                                                color: Colors.white70,
-                                                fontSize: 14,
-                                              ),
-                                            ),
                                           Text(
                                             'สถานีปัจจุบัน: $_currentStation',
                                             style: TextStyle(

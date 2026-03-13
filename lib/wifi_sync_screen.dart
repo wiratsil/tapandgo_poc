@@ -462,10 +462,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               // ========== Section 2: WiFi Sync ==========
               _buildSectionHeader('WiFi Sync', Icons.wifi, Colors.deepPurple),
               const SizedBox(height: 8),
-              _buildSyncStatusCard(),
-              const SizedBox(height: 8),
-              if (_selectedRole == SyncRole.none) _buildRoleSelection(),
-              if (_selectedRole != SyncRole.none) _buildActiveView(),
+              _buildSyncSection(),
               const SizedBox(height: 24),
 
               // ========== Section 3: เกี่ยวกับแอป ==========
@@ -623,130 +620,282 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  // ============ Section 2: WiFi Sync ============
+  // ============ Section 2: WiFi Sync (Compact) ============
 
-  Widget _buildSyncStatusCard() {
+  Widget _buildSyncSection() {
     Color statusColor = Colors.grey;
     IconData statusIcon = Icons.wifi_off;
+    String roleLabel = 'ไม่ได้เชื่อมต่อ';
 
     if (_syncService.isRunning) {
       statusColor = Colors.green;
-      statusIcon = _selectedRole == SyncRole.host ? Icons.dns : Icons.wifi;
+      if (_selectedRole == SyncRole.host) {
+        statusIcon = Icons.dns;
+        roleLabel = 'Host';
+      } else {
+        statusIcon = Icons.wifi;
+        roleLabel = 'Client';
+      }
     }
 
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(12),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // === Status Row ===
             Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
                     color: statusColor.withOpacity(0.1),
                     shape: BoxShape.circle,
                   ),
-                  child: Icon(statusIcon, color: statusColor, size: 28),
+                  child: Icon(statusIcon, color: statusColor, size: 20),
                 ),
-                const SizedBox(width: 16),
+                const SizedBox(width: 10),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        _selectedRole == SyncRole.none
-                            ? 'ไม่ได้เชื่อมต่อ'
-                            : _selectedRole == SyncRole.host
-                            ? '🖥️ Host (Server)'
-                            : '📱 Client',
-                        style: const TextStyle(
-                          fontSize: 18,
+                        roleLabel,
+                        style: TextStyle(
+                          fontSize: 15,
                           fontWeight: FontWeight.bold,
+                          color: statusColor,
                         ),
                       ),
-                      const SizedBox(height: 4),
                       Text(
                         _status,
-                        style: TextStyle(color: Colors.grey.shade600),
+                        style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ],
                   ),
                 ),
                 if (_selectedRole == SyncRole.host)
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 6,
-                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
-                      color: Colors.blue.shade100,
-                      borderRadius: BorderRadius.circular(20),
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(12),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Icon(Icons.people, size: 16, color: Colors.blue),
+                        const Icon(Icons.people, size: 14, color: Colors.blue),
                         const SizedBox(width: 4),
-                        Text(
-                          '$_clientCount',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: Colors.blue,
-                          ),
-                        ),
+                        Text('$_clientCount', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue, fontSize: 13)),
                       ],
+                    ),
+                  ),
+                if (_syncService.isRunning)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 8),
+                    child: InkWell(
+                      onTap: _stopService,
+                      borderRadius: BorderRadius.circular(20),
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: Colors.red.withOpacity(0.1),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.stop, color: Colors.red, size: 18),
+                      ),
                     ),
                   ),
               ],
             ),
+
+            // === Local IP ===
             if (_localIp != null) ...[
-              const Divider(height: 24),
+              const SizedBox(height: 6),
               Row(
                 children: [
-                  const Icon(Icons.wifi, size: 16, color: Colors.grey),
-                  const SizedBox(width: 8),
-                  Text(
-                    'IP ของเครื่องนี้: $_localIp',
-                    style: TextStyle(color: Colors.grey.shade600),
+                  const Icon(Icons.wifi, size: 14, color: Colors.grey),
+                  const SizedBox(width: 6),
+                  Text('IP: $_localIp', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
+                ],
+              ),
+            ],
+
+            // === Role selection (when not connected) ===
+            if (_selectedRole == SyncRole.none) ...[
+              const Divider(height: 20),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _showNetworkDebugDialog,
+                      icon: const Icon(Icons.dns, size: 16),
+                      label: const Text('Host', style: TextStyle(fontSize: 13)),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.deepPurple,
+                        side: const BorderSide(color: Colors.deepPurple),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _showClientConnectDialog,
+                      icon: const Icon(Icons.phone_android, size: 16),
+                      label: const Text('Client', style: TextStyle(fontSize: 13)),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.blue,
+                        side: const BorderSide(color: Colors.blue),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
                   ),
                 ],
               ),
             ],
+
+            // === QR Code (Host) ===
             if (_selectedRole == SyncRole.host &&
                 _syncService.hostIp != null &&
                 _syncService.hostIp!.isNotEmpty) ...[
-              const Divider(height: 24),
-              const Text(
-                'ให้ Client สแกน QR Code เพื่อเชื่อมต่อ',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 16),
+              const Divider(height: 16),
               Center(
-                child: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: QrImageView(
-                    data: _syncService.hostIp!,
-                    version: QrVersions.auto,
-                    size: 150.0,
-                  ),
+                child: Column(
+                  children: [
+                    Text('Client สแกน QR เพื่อเชื่อมต่อ', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.grey.shade300),
+                      ),
+                      child: QrImageView(
+                        data: _syncService.hostIp!,
+                        version: QrVersions.auto,
+                        size: 120.0,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _syncService.hostIp!,
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, letterSpacing: 1.5),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 8),
-              Center(
-                child: Text(
-                  _syncService.hostIp!,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 2,
+            ],
+
+            // === Active: Door location + Scan ===
+            if (_selectedRole != SyncRole.none) ...[
+              const Divider(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: SizedBox(
+                      height: 42,
+                      child: TextField(
+                        controller: _doorLocationController,
+                        style: const TextStyle(fontSize: 14),
+                        decoration: InputDecoration(
+                          labelText: 'ตำแหน่งประตู',
+                          labelStyle: const TextStyle(fontSize: 13),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                          prefixIcon: const Icon(Icons.door_front_door, size: 18),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          isDense: true,
+                        ),
+                      ),
+                    ),
                   ),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    height: 42,
+                    child: ElevatedButton.icon(
+                      onPressed: _syncService.isRunning ? _sendScan : null,
+                      icon: const Icon(Icons.qr_code_scanner, size: 16),
+                      label: const Text('สแกน', style: TextStyle(fontSize: 13)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+
+            // === Synced Data (collapsible) ===
+            if (_selectedRole != SyncRole.none) ...[
+              const SizedBox(height: 8),
+              Theme(
+                data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                child: ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  childrenPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.sync, color: Colors.deepPurple, size: 20),
+                  title: Text(
+                    'ข้อมูลที่ Sync (${_syncedData.length})',
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_syncedData.isNotEmpty)
+                        GestureDetector(
+                          onTap: () => setState(() => _syncedData.clear()),
+                          child: const Padding(
+                            padding: EdgeInsets.only(right: 8),
+                            child: Icon(Icons.clear_all, size: 18, color: Colors.grey),
+                          ),
+                        ),
+                      const Icon(Icons.expand_more, size: 20),
+                    ],
+                  ),
+                  children: [
+                    if (_syncedData.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        child: Center(
+                          child: Text('ยังไม่มีข้อมูล', style: TextStyle(color: Colors.grey.shade400, fontSize: 13)),
+                        ),
+                      )
+                    else
+                      ...List.generate(_syncedData.length, (index) {
+                        final data = _syncedData[index];
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: Row(
+                            children: [
+                              Icon(Icons.door_front_door, color: Colors.deepPurple.withOpacity(0.5), size: 18),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  '${data.doorLocation} • ${_formatTime(data.timestamp)}',
+                                  style: const TextStyle(fontSize: 13),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              Text(
+                                data.id.substring(0, 6),
+                                style: TextStyle(color: Colors.grey.shade400, fontSize: 10, fontFamily: 'monospace'),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
+                  ],
                 ),
               ),
             ],
@@ -755,85 +904,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
   }
-
-  Widget _buildRoleSelection() {
-    return Column(
-      children: [
-        _buildRoleButton(
-          title: 'Host (Server)',
-          subtitle: 'เลือกเครือข่าย IP เพื่อทำเป็นเซิร์ฟเวอร์',
-          icon: Icons.dns,
-          color: Colors.deepPurple,
-          onTap: _showNetworkDebugDialog,
-        ),
-        const SizedBox(height: 8),
-        _buildRoleButton(
-          title: 'Client',
-          subtitle: 'เชื่อมต่อไปยัง Host',
-          icon: Icons.phone_android,
-          color: Colors.blue,
-          onTap: () => _showClientConnectDialog(),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildRoleButton({
-    required String title,
-    required String subtitle,
-    required IconData icon,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
-    return SizedBox(
-      width: double.infinity,
-      child: Card(
-        elevation: 2,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(16),
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: color.withOpacity(0.1),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(icon, color: color, size: 32),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: color,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        subtitle,
-                        style: TextStyle(color: Colors.grey.shade600),
-                      ),
-                    ],
-                  ),
-                ),
-                Icon(Icons.arrow_forward_ios, color: color, size: 20),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+  // ============ WiFi Sync Dialogs ============
 
   Future<void> _showNetworkDebugDialog() async {
     final ips = await _syncService.getInternalIps();
@@ -900,7 +971,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Search button
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton.icon(
@@ -922,9 +992,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           )
                         : const Icon(Icons.search),
                     label: Text(
-                      _isSearchingHosts
-                          ? 'กำลังค้นหา...'
-                          : '🔍 ค้นหา Host อัตโนมัติ',
+                      _isSearchingHosts ? 'กำลังค้นหา...' : '🔍 ค้นหา Host อัตโนมัติ',
                     ),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.orange,
@@ -933,14 +1001,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 ),
-
-                // Discovered hosts list
                 if (_discoveredHosts.isNotEmpty) ...[
                   const SizedBox(height: 16),
-                  const Text(
-                    'Host ที่พบ:',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
+                  const Text('Host ที่พบ:', style: TextStyle(fontWeight: FontWeight.bold)),
                   const SizedBox(height: 8),
                   Container(
                     constraints: const BoxConstraints(maxHeight: 150),
@@ -951,10 +1014,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         final host = _discoveredHosts[index];
                         return Card(
                           child: ListTile(
-                            leading: const Icon(
-                              Icons.computer,
-                              color: Colors.green,
-                            ),
+                            leading: const Icon(Icons.computer, color: Colors.green),
                             title: Text(host.deviceName),
                             subtitle: Text('${host.ip}:${host.port}'),
                             onTap: () {
@@ -962,10 +1022,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               setDialogState(() {});
                             },
                             trailing: _hostIpController.text == host.ip
-                                ? const Icon(
-                                    Icons.check_circle,
-                                    color: Colors.green,
-                                  )
+                                ? const Icon(Icons.check_circle, color: Colors.green)
                                 : null,
                           ),
                         );
@@ -979,22 +1036,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
                   ),
                 ],
-
                 const SizedBox(height: 16),
                 TextField(
                   controller: _hostIpController,
                   decoration: InputDecoration(
                     labelText: 'Host IP',
                     hintText: '192.168.43.1',
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                     prefixIcon: const Icon(Icons.wifi),
                     suffixIcon: IconButton(
-                      icon: const Icon(
-                        Icons.qr_code_scanner,
-                        color: Colors.deepPurple,
-                      ),
+                      icon: const Icon(Icons.qr_code_scanner, color: Colors.deepPurple),
                       onPressed: () async {
                         final scannedIp = await _scanQrCode();
                         if (scannedIp != null && mounted) {
@@ -1031,9 +1082,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<String?> _scanQrCode() async {
-    const cameraChannel = MethodChannel(
-      'com.example.tapandgo_poc/camera_check',
-    );
+    const cameraChannel = MethodChannel('com.example.tapandgo_poc/camera_check');
     int cameraCount = 0;
     try {
       cameraCount = await cameraChannel.invokeMethod('checkCamera') ?? 0;
@@ -1047,9 +1096,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('ไม่พบกล้อง'),
-          content: const Text(
-            'อุปกรณ์นี้ไม่มีกล้อง ไม่สามารถสแกน QR Code ได้\nกรุณาใส่ IP ด้วยตนเอง',
-          ),
+          content: const Text('อุปกรณ์นี้ไม่มีกล้อง ไม่สามารถสแกน QR Code ได้\nกรุณาใส่ IP ด้วยตนเอง'),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
@@ -1065,9 +1112,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context: context,
       builder: (context) {
         return Dialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-          ),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           child: Container(
             height: 400,
             padding: const EdgeInsets.all(16),
@@ -1104,159 +1149,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         );
       },
-    );
-  }
-
-  Widget _buildActiveView() {
-    return Column(
-      children: [
-        // Door location and Scan button
-        Card(
-          elevation: 2,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _doorLocationController,
-                    decoration: InputDecoration(
-                      labelText: 'ตำแหน่งประตู',
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      prefixIcon: const Icon(Icons.door_front_door),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 12,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                SizedBox(
-                  height: 56,
-                  child: ElevatedButton.icon(
-                    onPressed: _syncService.isRunning ? _sendScan : null,
-                    icon: const Icon(Icons.qr_code_scanner),
-                    label: const Text('สแกน'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      padding: const EdgeInsets.symmetric(horizontal: 24),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-
-        const SizedBox(height: 8),
-
-        // Synced Data List
-        Card(
-          elevation: 2,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Row(
-                  children: [
-                    const Icon(Icons.sync, color: Colors.deepPurple),
-                    const SizedBox(width: 8),
-                    Text(
-                      'ข้อมูลที่ Sync (${_syncedData.length})',
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const Spacer(),
-                    if (_syncedData.isNotEmpty)
-                      TextButton.icon(
-                        onPressed: () {
-                          setState(() {
-                            _syncedData.clear();
-                          });
-                        },
-                        icon: const Icon(Icons.clear_all, size: 18),
-                        label: const Text('ล้าง'),
-                      ),
-                  ],
-                ),
-              ),
-              const Divider(height: 1),
-              if (_syncedData.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.all(32),
-                  child: Center(
-                    child: Column(
-                      children: [
-                        Icon(
-                          Icons.inbox_outlined,
-                          size: 48,
-                          color: Colors.grey.shade300,
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'ยังไม่มีข้อมูล',
-                          style: TextStyle(color: Colors.grey.shade500),
-                        ),
-                      ],
-                    ),
-                  ),
-                )
-              else
-                ListView.separated(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  itemCount: _syncedData.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (context, index) {
-                    final data = _syncedData[index];
-                    return ListTile(
-                      leading: CircleAvatar(
-                        backgroundColor: Colors.deepPurple.withOpacity(0.1),
-                        child: const Icon(
-                          Icons.door_front_door,
-                          color: Colors.deepPurple,
-                        ),
-                      ),
-                      title: Text(
-                        data.doorLocation,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                      subtitle: Text(
-                        '${_formatTime(data.timestamp)} • ${data.deviceId ?? ""}',
-                        style: TextStyle(
-                          color: Colors.grey.shade600,
-                          fontSize: 12,
-                        ),
-                      ),
-                      trailing: Text(
-                        data.id.substring(0, 8),
-                        style: TextStyle(
-                          color: Colors.grey.shade400,
-                          fontSize: 11,
-                          fontFamily: 'monospace',
-                        ),
-                      ),
-                    );
-                  },
-                ),
-            ],
-          ),
-        ),
-      ],
     );
   }
 
