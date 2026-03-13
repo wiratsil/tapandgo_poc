@@ -100,7 +100,7 @@ class PendingTransaction {
   factory PendingTransaction.fromJson(Map<String, dynamic> json) {
     return PendingTransaction(
       aid: json['aid'] as String,
-      tapInTime: DateTime.parse(json['tapInTime'] as String).toLocal(),
+      tapInTime: DateTime.parse(json['tapInTime'] as String),
       tapInLoc: TransactionLocation.fromJson(
         json['tapInLoc'] as Map<String, dynamic>,
       ),
@@ -111,7 +111,7 @@ class PendingTransaction {
   Map<String, dynamic> toJson() {
     return {
       'aid': aid,
-      'tapInTime': tapInTime.toIso8601String(),
+      'tapInTime': tapInTime.toUtc().toIso8601String(),
       'tapInLoc': tapInLoc.toJson(),
       'routeId': routeId,
     };

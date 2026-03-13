@@ -22,14 +22,14 @@ class ScanData {
 
   Map<String, dynamic> toJson() => {
     'id': id,
-    'timestamp': timestamp.toIso8601String(),
+    'timestamp': timestamp.toUtc().toIso8601String(),
     'door_location': doorLocation,
     'device_id': deviceId,
   };
 
   factory ScanData.fromJson(Map<String, dynamic> json) => ScanData(
     id: json['id'] as String,
-    timestamp: DateTime.parse(json['timestamp'] as String).toLocal(),
+    timestamp: DateTime.parse(json['timestamp'] as String),
     doorLocation: json['door_location'] as String,
     deviceId: json['device_id'] as String?,
   );
@@ -60,7 +60,7 @@ class PendingTransactionSync {
   Map<String, dynamic> toJson() => {
     'type': 'pending_sync',
     'aid': aid,
-    'tap_in_time': tapInTime.toIso8601String(),
+    'tap_in_time': tapInTime.toUtc().toIso8601String(),
     'tap_in_lat': tapInLat,
     'tap_in_lng': tapInLng,
     'is_remove': isRemove,
@@ -70,7 +70,7 @@ class PendingTransactionSync {
   factory PendingTransactionSync.fromJson(Map<String, dynamic> json) =>
       PendingTransactionSync(
         aid: json['aid'] as String,
-        tapInTime: DateTime.parse(json['tap_in_time'] as String).toLocal(),
+        tapInTime: DateTime.parse(json['tap_in_time'] as String),
         tapInLat: (json['tap_in_lat'] as num?)?.toDouble() ?? 0.0,
         tapInLng: (json['tap_in_lng'] as num?)?.toDouble() ?? 0.0,
         isRemove: json['is_remove'] as bool? ?? false,
@@ -283,7 +283,7 @@ class WifiSyncService {
           '💓 Sending heartbeat to ${_connectedClients.length} clients',
         );
         _broadcastToClients(
-          '{"type":"heartbeat","timestamp":"${DateTime.now().toIso8601String()}"}',
+          '{"type":"heartbeat","timestamp":"${DateTime.now().toUtc().toIso8601String()}"}',
         );
       }
     });

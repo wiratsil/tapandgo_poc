@@ -9,22 +9,32 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'services/wifi_sync_service.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
-/// WiFi Sync Screen - Allows selecting role (Host/Client) and syncing scan data
-class WifiSyncScreen extends StatefulWidget {
-  const WifiSyncScreen({super.key});
+/// Settings Screen - รวมข้อมูลรถ, WiFi Sync, และเกี่ยวกับแอป
+class SettingsScreen extends StatefulWidget {
+  final String plateNumber;
+  final int? activeRouteId;
+  final Future<void> Function(String newPlate) onPlateChanged;
+
+  const SettingsScreen({
+    super.key,
+    required this.plateNumber,
+    this.activeRouteId,
+    required this.onPlateChanged,
+  });
 
   @override
-  State<WifiSyncScreen> createState() => _WifiSyncScreenState();
+  State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
-class _WifiSyncScreenState extends State<WifiSyncScreen> {
+class _SettingsScreenState extends State<SettingsScreen> {
   final WifiSyncService _syncService = WifiSyncService();
   final TextEditingController _hostIpController = TextEditingController(
     text: WifiSyncService.defaultHostIp,
   );
   final TextEditingController _doorLocationController = TextEditingController(
-    text: 'ประตู 2', // Default value, will be updated from service
+    text: 'ประตู 2',
   );
   final Uuid _uuid = const Uuid();
 
@@ -39,6 +49,13 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
   List<DiscoveredHost> _discoveredHosts = [];
   bool _isSearchingHosts = false;
 
+  // App info
+  String _appVersion = '';
+  String _appBuildNumber = '';
+
+  // Current plate (can be updated from dialog)
+  late String _currentPlateNumber;
+
   // Subscriptions
   StreamSubscription<ScanData>? _scanDataSub;
   StreamSubscription<String>? _statusSub;
@@ -48,19 +65,32 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
   @override
   void initState() {
     super.initState();
+    _currentPlateNumber = widget.plateNumber;
     _loadSavedHostIp();
     _getLocalIp();
     _setupListeners();
-    // Initialize with current service value
+    _loadAppInfo();
     _doorLocationController.text = _syncService.doorLocation;
 
-    // Add listener to update service when text changes
     _doorLocationController.addListener(() {
       _syncService.setDoorLocation(_doorLocationController.text);
     });
 
-    // Restore state from singleton if service is already running
     _restoreStateFromService();
+  }
+
+  Future<void> _loadAppInfo() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      if (mounted) {
+        setState(() {
+          _appVersion = info.version;
+          _appBuildNumber = info.buildNumber;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading app info: $e');
+    }
   }
 
   Future<void> _loadSavedHostIp() async {
@@ -92,7 +122,6 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
 
   Future<void> _getLocalIp() async {
     try {
-      // Android requires location permission to get WiFi info
       if (Platform.isAndroid) {
         var status = await Permission.location.status;
         if (!status.isGranted) {
@@ -101,7 +130,6 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
 
         if (!status.isGranted) {
           debugPrint('Location permission denied, cannot get WiFi IP');
-          // Show snackbar
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
@@ -116,18 +144,13 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
       final info = NetworkInfo();
       var ip = await info.getWifiIP();
 
-      // If IP is null, it might be because we are the Hotspot provider
-      // Hotspot provider IP is usually 192.168.43.1 on Android
       if (ip == null && Platform.isAndroid) {
-        // We can't easily detect if we are hotspot, but we can guess
-        // checking network interfaces is another way but complex
         debugPrint('IP is null, might be Hotspot');
       }
 
       if (mounted) {
         setState(() {
           _localIp = ip;
-          // If we couldn't get IP, suggest the default hotspot IP
           if (_localIp == null) {
             _status = 'ไม่พบ IP (ถ้าเปิด Hotspot อยู่ IP คือ 192.168.43.1)';
           }
@@ -142,7 +165,6 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
     _scanDataSub = _syncService.onScanDataReceived.listen((data) {
       if (mounted) {
         setState(() {
-          // Avoid duplicates by checking ID
           if (!_syncedData.any((d) => d.id == data.id)) {
             _syncedData.insert(0, data);
           }
@@ -169,7 +191,6 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
     _discoveredHostSub = _syncService.onHostDiscovered.listen((host) {
       if (mounted) {
         setState(() {
-          // Update discovered hosts list
           _discoveredHosts = _syncService.discoveredHosts;
         });
       }
@@ -178,17 +199,17 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
 
   @override
   void dispose() {
-    // Only cancel subscriptions, NOT the service itself (it's a singleton)
     _scanDataSub?.cancel();
     _statusSub?.cancel();
     _clientCountSub?.cancel();
     _discoveredHostSub?.cancel();
     _syncService.stopDiscovery();
-    // Do NOT call _syncService.dispose() - it should persist!
     _hostIpController.dispose();
     _doorLocationController.dispose();
     super.dispose();
   }
+
+  // ============ WiFi Sync Methods (เหมือนเดิม) ============
 
   Future<void> _searchForHosts() async {
     setState(() {
@@ -199,7 +220,6 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
 
     await _syncService.startDiscoveryListener();
 
-    // Search for 5 seconds
     await Future.delayed(const Duration(seconds: 5));
 
     if (mounted) {
@@ -228,7 +248,6 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
     if (success) {
       setState(() {
         _selectedRole = SyncRole.host;
-        // If local IP is null (common in Hotspot), explicitly show the default hotspot IP
         if (_localIp == null && specificIp == null) {
           _status =
               'Host started (Hotspot IP: ${WifiSyncService.defaultHostIp})';
@@ -236,7 +255,6 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
           _status = 'Host started on $specificIp';
         }
 
-        // Auto-set door location for Host
         _doorLocationController.text = 'ประตู Host';
         _syncService.setDoorLocation('ประตู Host');
       });
@@ -277,7 +295,6 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
 
     final success = await _syncService.startAsClient(hostIp: hostIp);
     if (success) {
-      // Save successful IP
       try {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('last_host_ip', hostIp);
@@ -288,7 +305,6 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
       setState(() {
         _selectedRole = SyncRole.client;
 
-        // Auto-set door location for Client
         _doorLocationController.text = 'ประตู Client';
         _syncService.setDoorLocation('ประตู Client');
       });
@@ -309,7 +325,7 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
   Future<void> _sendScan() async {
     final scanData = ScanData(
       id: _uuid.v4(),
-      timestamp: DateTime.now(),
+      timestamp: DateTime.now().toUtc(),
       doorLocation: _doorLocationController.text,
       deviceId: _localIp ?? 'unknown',
     );
@@ -326,11 +342,94 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
     );
   }
 
+  // ============ Plate Edit ============
+
+  void _showEditPlateDialog() {
+    final TextEditingController controller = TextEditingController(
+      text: _currentPlateNumber,
+    );
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('แก้ไขหมายเลขทะเบียนรถ'),
+          content: SingleChildScrollView(
+            child: TextField(
+              controller: controller,
+              decoration: const InputDecoration(
+                labelText: 'หมายเลขทะเบียน',
+                hintText: 'ตัวอย่าง: 12-3456',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ),
+          actions: [
+            SizedBox(
+              width: double.maxFinite,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  TextButton(
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      minimumSize: Size.zero,
+                    ),
+                    onPressed: () async {
+                      final currentPlate = controller.text;
+                      if (currentPlate.isNotEmpty) {
+                        Navigator.of(context).pop();
+                        setState(() {
+                          _currentPlateNumber = currentPlate;
+                        });
+                        await widget.onPlateChanged(currentPlate);
+                      }
+                    },
+                    child: const Text(
+                      'รีเฟรช',
+                      style: TextStyle(color: Colors.blue),
+                    ),
+                  ),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('ยกเลิก'),
+                      ),
+                      ElevatedButton(
+                        onPressed: () async {
+                          if (controller.text.isNotEmpty &&
+                              controller.text != _currentPlateNumber) {
+                            Navigator.of(context).pop();
+                            setState(() {
+                              _currentPlateNumber = controller.text;
+                            });
+                            await widget.onPlateChanged(controller.text);
+                          } else {
+                            Navigator.of(context).pop();
+                          }
+                        },
+                        child: const Text('บันทึก'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // ============ UI Build ============
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('WiFi Sync'),
+        title: const Text('ตั้งค่า'),
         backgroundColor: Colors.deepPurple,
         foregroundColor: Colors.white,
         actions: [
@@ -351,17 +450,28 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
           ),
         ),
         child: SafeArea(
-          child: Column(
+          child: ListView(
+            padding: const EdgeInsets.all(16),
             children: [
-              // Status Card
-              _buildStatusCard(),
+              // ========== Section 1: ข้อมูลรถ ==========
+              _buildSectionHeader('ข้อมูลรถ', Icons.directions_bus, Colors.orange),
+              const SizedBox(height: 8),
+              _buildVehicleInfoSection(),
+              const SizedBox(height: 24),
 
-              // Role Selection or Active View
-              Expanded(
-                child: _selectedRole == SyncRole.none
-                    ? _buildRoleSelection()
-                    : _buildActiveView(),
-              ),
+              // ========== Section 2: WiFi Sync ==========
+              _buildSectionHeader('WiFi Sync', Icons.wifi, Colors.deepPurple),
+              const SizedBox(height: 8),
+              _buildSyncStatusCard(),
+              const SizedBox(height: 8),
+              if (_selectedRole == SyncRole.none) _buildRoleSelection(),
+              if (_selectedRole != SyncRole.none) _buildActiveView(),
+              const SizedBox(height: 24),
+
+              // ========== Section 3: เกี่ยวกับแอป ==========
+              _buildSectionHeader('เกี่ยวกับแอป', Icons.info_outline, Colors.blueGrey),
+              const SizedBox(height: 8),
+              _buildAboutSection(),
             ],
           ),
         ),
@@ -369,7 +479,153 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
     );
   }
 
-  Widget _buildStatusCard() {
+  Widget _buildSectionHeader(String title, IconData icon, Color color) {
+    return Row(
+      children: [
+        Icon(icon, color: color, size: 22),
+        const SizedBox(width: 8),
+        Text(
+          title,
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ============ Section 1: ข้อมูลรถ ============
+
+  Widget _buildVehicleInfoSection() {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            // ทะเบียนรถ
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.directions_bus,
+                    color: Colors.orange,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'ทะเบียนรถ',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _currentPlateNumber.isEmpty
+                            ? 'ยังไม่ได้กำหนด'
+                            : _currentPlateNumber,
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: _currentPlateNumber.isEmpty
+                              ? Colors.red
+                              : Colors.black87,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                ElevatedButton.icon(
+                  onPressed: _showEditPlateDialog,
+                  icon: const Icon(Icons.edit, size: 16),
+                  label: const Text('แก้ไข'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.orange,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+
+            const Divider(height: 24),
+
+            // Route ID
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.route,
+                    color: Colors.blue,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Route ID',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        widget.activeRouteId != null &&
+                                widget.activeRouteId != 0
+                            ? '${widget.activeRouteId}'
+                            : 'ยังไม่มีข้อมูล',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: widget.activeRouteId != null &&
+                                  widget.activeRouteId != 0
+                              ? Colors.black87
+                              : Colors.grey,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ============ Section 2: WiFi Sync ============
+
+  Widget _buildSyncStatusCard() {
     Color statusColor = Colors.grey;
     IconData statusIcon = Icons.wifi_off;
 
@@ -379,8 +635,7 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
     }
 
     return Card(
-      margin: const EdgeInsets.all(16),
-      elevation: 4,
+      elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -502,56 +757,24 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
   }
 
   Widget _buildRoleSelection() {
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          return SingleChildScrollView(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(minHeight: constraints.maxHeight),
-              child: IntrinsicHeight(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      'เลือก Role',
-                      style: Theme.of(context).textTheme.headlineSmall
-                          ?.copyWith(fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'เลือกว่าเครื่องนี้จะทำหน้าที่เป็น Host หรือ Client',
-                      style: TextStyle(color: Colors.grey.shade600),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 32),
-
-                    // Host Button
-                    _buildRoleButton(
-                      title: 'Host (Server)',
-                      subtitle: 'เลือกเครือข่าย IP เพื่อทำเป็นเซิร์ฟเวอร์',
-                      icon: Icons.dns,
-                      color: Colors.deepPurple,
-                      onTap: _showNetworkDebugDialog,
-                    ),
-
-                    const SizedBox(height: 16),
-
-                    // Client Button
-                    _buildRoleButton(
-                      title: 'Client',
-                      subtitle: 'เชื่อมต่อไปยัง Host',
-                      icon: Icons.phone_android,
-                      color: Colors.blue,
-                      onTap: () => _showClientConnectDialog(),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          );
-        },
-      ),
+    return Column(
+      children: [
+        _buildRoleButton(
+          title: 'Host (Server)',
+          subtitle: 'เลือกเครือข่าย IP เพื่อทำเป็นเซิร์ฟเวอร์',
+          icon: Icons.dns,
+          color: Colors.deepPurple,
+          onTap: _showNetworkDebugDialog,
+        ),
+        const SizedBox(height: 8),
+        _buildRoleButton(
+          title: 'Client',
+          subtitle: 'เชื่อมต่อไปยัง Host',
+          icon: Icons.phone_android,
+          color: Colors.blue,
+          onTap: () => _showClientConnectDialog(),
+        ),
+      ],
     );
   }
 
@@ -642,7 +865,7 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
                     icon: const Icon(Icons.play_arrow, color: Colors.green),
                     tooltip: 'Start Host on this IP',
                     onPressed: () {
-                      Navigator.pop(context); // Close dialog
+                      Navigator.pop(context);
                       _startAsHost(specificIp: address);
                     },
                   ),
@@ -808,7 +1031,6 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
   }
 
   Future<String?> _scanQrCode() async {
-    // Check camera availability before opening scanner
     const cameraChannel = MethodChannel(
       'com.example.tapandgo_poc/camera_check',
     );
@@ -889,159 +1111,229 @@ class _WifiSyncScreenState extends State<WifiSyncScreen> {
     return Column(
       children: [
         // Door location and Scan button
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _doorLocationController,
-                  decoration: InputDecoration(
-                    labelText: 'ตำแหน่งประตู',
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    prefixIcon: const Icon(Icons.door_front_door),
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 12,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 16),
-              SizedBox(
-                height: 56,
-                child: ElevatedButton.icon(
-                  onPressed: _syncService.isRunning ? _sendScan : null,
-                  icon: const Icon(Icons.qr_code_scanner),
-                  label: const Text('สแกน'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        const SizedBox(height: 16),
-
-        // Synced Data List
-        Expanded(
-          child: Card(
-            margin: const EdgeInsets.all(16),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+        Card(
+          elevation: 2,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
               children: [
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.sync, color: Colors.deepPurple),
-                      const SizedBox(width: 8),
-                      Text(
-                        'ข้อมูลที่ Sync (${_syncedData.length})',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
+                Expanded(
+                  child: TextField(
+                    controller: _doorLocationController,
+                    decoration: InputDecoration(
+                      labelText: 'ตำแหน่งประตู',
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
                       ),
-                      const Spacer(),
-                      if (_syncedData.isNotEmpty)
-                        TextButton.icon(
-                          onPressed: () {
-                            setState(() {
-                              _syncedData.clear();
-                            });
-                          },
-                          icon: const Icon(Icons.clear_all, size: 18),
-                          label: const Text('ล้าง'),
-                        ),
-                    ],
+                      prefixIcon: const Icon(Icons.door_front_door),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                    ),
                   ),
                 ),
-                const Divider(height: 1),
-                Expanded(
-                  child: _syncedData.isEmpty
-                      ? Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.inbox_outlined,
-                                size: 64,
-                                color: Colors.grey.shade300,
-                              ),
-                              const SizedBox(height: 16),
-                              Text(
-                                'ยังไม่มีข้อมูล',
-                                style: TextStyle(color: Colors.grey.shade500),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                'กดปุ่ม "สแกน" เพื่อส่งข้อมูล',
-                                style: TextStyle(
-                                  color: Colors.grey.shade400,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ],
-                          ),
-                        )
-                      : ListView.separated(
-                          itemCount: _syncedData.length,
-                          separatorBuilder: (_, __) => const Divider(height: 1),
-                          itemBuilder: (context, index) {
-                            final data = _syncedData[index];
-                            return ListTile(
-                              leading: CircleAvatar(
-                                backgroundColor: Colors.deepPurple.withOpacity(
-                                  0.1,
-                                ),
-                                child: const Icon(
-                                  Icons.door_front_door,
-                                  color: Colors.deepPurple,
-                                ),
-                              ),
-                              title: Text(
-                                data.doorLocation,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              subtitle: Text(
-                                '${_formatTime(data.timestamp)} • ${data.deviceId ?? ""}',
-                                style: TextStyle(
-                                  color: Colors.grey.shade600,
-                                  fontSize: 12,
-                                ),
-                              ),
-                              trailing: Text(
-                                data.id.substring(0, 8),
-                                style: TextStyle(
-                                  color: Colors.grey.shade400,
-                                  fontSize: 11,
-                                  fontFamily: 'monospace',
-                                ),
-                              ),
-                            );
-                          },
-                        ),
+                const SizedBox(width: 16),
+                SizedBox(
+                  height: 56,
+                  child: ElevatedButton.icon(
+                    onPressed: _syncService.isRunning ? _sendScan : null,
+                    icon: const Icon(Icons.qr_code_scanner),
+                    label: const Text('สแกน'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                    ),
+                  ),
                 ),
               ],
             ),
           ),
         ),
+
+        const SizedBox(height: 8),
+
+        // Synced Data List
+        Card(
+          elevation: 2,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    const Icon(Icons.sync, color: Colors.deepPurple),
+                    const SizedBox(width: 8),
+                    Text(
+                      'ข้อมูลที่ Sync (${_syncedData.length})',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const Spacer(),
+                    if (_syncedData.isNotEmpty)
+                      TextButton.icon(
+                        onPressed: () {
+                          setState(() {
+                            _syncedData.clear();
+                          });
+                        },
+                        icon: const Icon(Icons.clear_all, size: 18),
+                        label: const Text('ล้าง'),
+                      ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              if (_syncedData.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.all(32),
+                  child: Center(
+                    child: Column(
+                      children: [
+                        Icon(
+                          Icons.inbox_outlined,
+                          size: 48,
+                          color: Colors.grey.shade300,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'ยังไม่มีข้อมูล',
+                          style: TextStyle(color: Colors.grey.shade500),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              else
+                ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: _syncedData.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final data = _syncedData[index];
+                    return ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: Colors.deepPurple.withOpacity(0.1),
+                        child: const Icon(
+                          Icons.door_front_door,
+                          color: Colors.deepPurple,
+                        ),
+                      ),
+                      title: Text(
+                        data.doorLocation,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      subtitle: Text(
+                        '${_formatTime(data.timestamp)} • ${data.deviceId ?? ""}',
+                        style: TextStyle(
+                          color: Colors.grey.shade600,
+                          fontSize: 12,
+                        ),
+                      ),
+                      trailing: Text(
+                        data.id.substring(0, 8),
+                        style: TextStyle(
+                          color: Colors.grey.shade400,
+                          fontSize: 11,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    );
+                  },
+                ),
+            ],
+          ),
+        ),
       ],
+    );
+  }
+
+  // ============ Section 3: เกี่ยวกับแอป ============
+
+  Widget _buildAboutSection() {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.blueGrey.withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.directions_bus_filled_rounded,
+                    color: Colors.blueGrey,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'TapAndGo POC',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'ขสมก. BMTA',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const Divider(height: 24),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'เวอร์ชัน',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey.shade600,
+                  ),
+                ),
+                Text(
+                  _appVersion.isNotEmpty
+                      ? '$_appVersion ($_appBuildNumber)'
+                      : 'กำลังโหลด...',
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 

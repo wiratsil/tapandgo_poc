@@ -19,7 +19,7 @@ class GpsData {
       lat: (json['lat'] ?? 0.0).toDouble(),
       lng: (json['lng'] ?? 0.0).toDouble(),
       rec: json['rec'] != null
-          ? DateTime.tryParse(json['rec'].toString())?.toLocal()
+          ? DateTime.tryParse(json['rec'].toString())
           : null,
       spd: (json['spd'] ?? 0.0).toDouble(),
     );

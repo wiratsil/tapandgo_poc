@@ -13,7 +13,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'models/transaction_model.dart';
 import 'success_result_screen.dart';
 import 'error_result_screen.dart';
-import 'wifi_sync_screen.dart';
+import 'wifi_sync_screen.dart'; // SettingsScreen
 import 'services/wifi_sync_service.dart';
 import 'services/location_service.dart';
 import 'services/mqtt_service.dart';
@@ -148,10 +148,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     return R * c;
   }
 
-  /// Format DateTime to "yyyy-MM-dd HH:mm:ss"
+  /// Format DateTime to UTC ISO 8601
   String _formatDateTime(DateTime dt) {
-    String pad(int n) => n.toString().padLeft(2, '0');
-    return '${dt.year}-${pad(dt.month)}-${pad(dt.day)} ${pad(dt.hour)}:${pad(dt.minute)}:${pad(dt.second)}';
+    return dt.toUtc().toIso8601String();
   }
 
   String _plateNumber = '';
@@ -162,6 +161,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   String _nextStation = '';
   int? _nextStationSeq;
   double? _nextStationDistance;
+  int? _activeRouteId;
   bool _isGpsUpdating = false;
   Timer? _gpsUpdateTimer;
   bool _isPlateChanging = false;
@@ -427,9 +427,14 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   Future<void> _syncData() async {
     final syncService = DataSyncService();
     // Use the stored plate number if available, otherwise empty string
-    syncService.syncAllData(
+    final result = await syncService.syncAllData(
       plateNo: _plateNumber.isNotEmpty ? _plateNumber : '',
     );
+    if (mounted) {
+      setState(() {
+        _activeRouteId = result.activeRouteId;
+      });
+    }
   }
 
   void _setupPendingSyncListener() {
@@ -859,7 +864,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     );
     debugPrint('[DEBUG] 📊 Price Ranges Count: $count');
 
-    final tapInTime = DateTime.now();
+    final tapInTime = DateTime.now().toUtc();
 
     final pending = PendingTransaction(
       aid: qrData.aid,
@@ -941,7 +946,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     }
 
     final pending = _pendingTransactions[qrData.aid]!;
-    final tapOutTime = DateTime.now();
+    final tapOutTime = DateTime.now().toUtc();
 
     // Get current location for Tap Out (from MQTT GPS)
     var lat = _currentGpsData?.lat ?? 0.0;
@@ -1029,7 +1034,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         // --- Queue EMV Transaction — รอ GPS ที่เวลาเลย tapOutTime ก่อนส่ง ---
         final tapOutTime = DateTime.parse(
           payload.transactions.first.tapOutTime,
-        ).toLocal();
+        );
         _pendingEmvRequests.add(
           _PendingEmvRequest(
             payload: payload,
@@ -1183,8 +1188,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         '[EMV] 🛠️ txnId: ${firstTxn.txnId}, assetId: ${firstTxn.assetId}',
       );
 
-      final tapInTime = DateTime.parse(firstTxn.tapInTime).toLocal();
-      final tapOutTime = DateTime.parse(firstTxn.tapOutTime).toLocal();
+      final tapInTime = DateTime.parse(firstTxn.tapInTime);
+      final tapOutTime = DateTime.parse(firstTxn.tapOutTime);
       debugPrint('[EMV] ⏱️ tapInTime: $tapInTime, tapOutTime: $tapOutTime');
 
       // --- TapIn GPS ---
@@ -1627,6 +1632,15 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                         crossAxisAlignment:
                                             CrossAxisAlignment.start,
                                         children: [
+                                          if (_activeRouteId != null &&
+                                              _activeRouteId != 0)
+                                            Text(
+                                              'Route ID: $_activeRouteId',
+                                              style: TextStyle(
+                                                color: Colors.white70,
+                                                fontSize: 14,
+                                              ),
+                                            ),
                                           Text(
                                             'สถานีปัจจุบัน: $_currentStation',
                                             style: TextStyle(
@@ -1834,46 +1848,37 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                 child: Row(
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: [
-                                    GestureDetector(
-                                      onTap: _showEditPlateDialog,
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 16,
-                                          vertical: 8,
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 16,
+                                        vertical: 8,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.black.withOpacity(0.3),
+                                        borderRadius: BorderRadius.circular(
+                                          20,
                                         ),
-                                        decoration: BoxDecoration(
-                                          color: Colors.black.withOpacity(0.3),
-                                          borderRadius: BorderRadius.circular(
-                                            20,
-                                          ),
-                                          border: Border.all(
-                                            color: Colors.white54,
-                                          ),
+                                        border: Border.all(
+                                          color: Colors.white54,
                                         ),
-                                        child: Row(
-                                          children: [
-                                            const Icon(
-                                              Icons.directions_bus,
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          const Icon(
+                                            Icons.directions_bus,
+                                            color: Colors.white,
+                                            size: 20,
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Text(
+                                            _plateNumber,
+                                            style: const TextStyle(
                                               color: Colors.white,
-                                              size: 20,
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.bold,
                                             ),
-                                            const SizedBox(width: 8),
-                                            Text(
-                                              _plateNumber,
-                                              style: const TextStyle(
-                                                color: Colors.white,
-                                                fontSize: 16,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                            ),
-                                            const SizedBox(width: 8),
-                                            const Icon(
-                                              Icons.edit,
-                                              color: Colors.white70,
-                                              size: 16,
-                                            ),
-                                          ],
-                                        ),
+                                          ),
+                                        ],
                                       ),
                                     ),
                                     const SizedBox(width: 16),
@@ -1900,15 +1905,28 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                       ),
                                     ),
                                     const SizedBox(width: 16),
-                                    // WiFi Sync Button
+                                    // Settings Button
                                     GestureDetector(
-                                      onTap: () {
-                                        Navigator.of(context).push(
+                                      onTap: () async {
+                                        await Navigator.of(context).push(
                                           MaterialPageRoute(
-                                            builder: (_) =>
-                                                const WifiSyncScreen(),
+                                            builder: (_) => SettingsScreen(
+                                              plateNumber: _plateNumber,
+                                              activeRouteId: _activeRouteId,
+                                              onPlateChanged: (newPlate) async {
+                                                await _performPlateChange(newPlate);
+                                              },
+                                            ),
                                           ),
                                         );
+                                        // Refresh plate from SharedPreferences when returning
+                                        final prefs = await SharedPreferences.getInstance();
+                                        final savedPlate = prefs.getString('plate_number') ?? '';
+                                        if (mounted && savedPlate != _plateNumber) {
+                                          setState(() {
+                                            _plateNumber = savedPlate;
+                                          });
+                                        }
                                       },
                                       child: Container(
                                         padding: const EdgeInsets.symmetric(
@@ -1930,13 +1948,13 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                           mainAxisSize: MainAxisSize.min,
                                           children: const [
                                             Icon(
-                                              Icons.wifi,
+                                              Icons.settings,
                                               color: Colors.white,
                                               size: 20,
                                             ),
                                             SizedBox(width: 6),
                                             Text(
-                                              'Sync',
+                                              'ตั้งค่า',
                                               style: TextStyle(
                                                 color: Colors.white,
                                                 fontSize: 14,
@@ -2019,9 +2037,21 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                     ),
                     SizedBox(height: 24),
                     ElevatedButton.icon(
-                      icon: Icon(Icons.refresh),
-                      label: Text('แก้ไขทะเบียน'),
-                      onPressed: _showEditPlateDialog,
+                      icon: Icon(Icons.settings),
+                      label: Text('ไปตั้งค่า'),
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => SettingsScreen(
+                              plateNumber: _plateNumber,
+                              activeRouteId: _activeRouteId,
+                              onPlateChanged: (newPlate) async {
+                                await _performPlateChange(newPlate);
+                              },
+                            ),
+                          ),
+                        );
+                      },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.amber,
                         foregroundColor: Colors.black,
@@ -2054,75 +2084,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     );
   }
 
-  void _showEditPlateDialog() {
-    final TextEditingController controller = TextEditingController(
-      text: _plateNumber,
-    );
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('แก้ไขหมายเลขทะเบียนรถ'),
-          content: SingleChildScrollView(
-            child: TextField(
-              controller: controller,
-              decoration: const InputDecoration(
-                labelText: 'หมายเลขทะเบียน',
-                hintText: 'ตัวอย่าง: 12-3456',
-                border: OutlineInputBorder(),
-              ),
-            ),
-          ),
-          actions: [
-            SizedBox(
-              width: double.maxFinite,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  TextButton(
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      minimumSize: Size.zero,
-                    ),
-                    onPressed: () async {
-                      final currentPlate = controller.text;
-                      if (currentPlate.isNotEmpty) {
-                        Navigator.of(context).pop();
-                        await _performPlateChange(currentPlate);
-                      }
-                    },
-                    child: const Text('รีเฟรช', style: TextStyle(color: Colors.blue)),
-                  ),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      TextButton(
-                        onPressed: () => Navigator.of(context).pop(),
-                        child: const Text('ยกเลิก'),
-                      ),
-                      ElevatedButton(
-                        onPressed: () async {
-                          if (controller.text.isNotEmpty &&
-                              controller.text != _plateNumber) {
-                            Navigator.of(context).pop();
-                            await _performPlateChange(controller.text);
-                          } else {
-                            Navigator.of(context).pop();
-                          }
-                        },
-                        child: const Text('บันทึก'),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
+  // _showEditPlateDialog() ย้ายไปหน้า SettingsScreen แล้ว
 
   /// Full plate change flow with loading overlay
   Future<void> _performPlateChange(String newPlate) async {
@@ -2176,13 +2138,19 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
     // Step 4: Sync data
     setState(() => _plateChangeStatus = 'กำลังดาวน์โหลดข้อมูลเส้นทาง...');
-    bool syncSuccess = false;
+    SyncResult? syncResult;
     try {
       final syncService = DataSyncService();
-      syncSuccess = await syncService.syncAllData(plateNo: _plateNumber);
-      if (!syncSuccess) {
+      syncResult = await syncService.syncAllData(plateNo: _plateNumber);
+      if (!syncResult.isSuccess) {
         _plateChangeErrors.add('❌ ดึงข้อมูลเส้นทางไม่สำเร็จ');
-        debugPrint('[PLATE] ❌ syncAllData returned false');
+        debugPrint('[PLATE] ❌ syncAllData returned failure');
+      } else {
+        if (mounted) {
+          setState(() {
+            _activeRouteId = syncResult?.activeRouteId;
+          });
+        }
       }
     } catch (e) {
       _plateChangeErrors.add('❌ ดึงข้อมูลเส้นทางล้มเหลว: $e');
@@ -2268,7 +2236,17 @@ class _WelcomeScreenState extends State<WelcomeScreen>
               TextButton(
                 onPressed: () {
                   Navigator.of(ctx).pop();
-                  _showEditPlateDialog(); // let user change plate
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => SettingsScreen(
+                        plateNumber: _plateNumber,
+                        activeRouteId: _activeRouteId,
+                        onPlateChanged: (newPlate) async {
+                          await _performPlateChange(newPlate);
+                        },
+                      ),
+                    ),
+                  );
                 },
                 child: Text('เปลี่ยนทะเบียน'),
               ),

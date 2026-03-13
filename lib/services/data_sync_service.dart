@@ -9,6 +9,13 @@ import '../models/check_version_model.dart';
 import '../models/route_detail_model.dart';
 import '../models/price_range_model.dart';
 
+class SyncResult {
+  final bool isSuccess;
+  final int activeRouteId;
+
+  SyncResult({required this.isSuccess, this.activeRouteId = 0});
+}
+
 class DataSyncService {
   final CommonDataService _commonDataService = CommonDataService();
   final RouteService _routeService = RouteService();
@@ -19,7 +26,7 @@ class DataSyncService {
   // Default plate number
   static const String _defaultPlateNo = '';
 
-  Future<bool> syncAllData({String plateNo = _defaultPlateNo}) async {
+  Future<SyncResult> syncAllData({String plateNo = _defaultPlateNo}) async {
     try {
       debugPrint('[DEBUG] 🔄 Starting Data Sync with plateNo: $plateNo');
 
@@ -30,7 +37,7 @@ class DataSyncService {
       final commonDataResponse = await _commonDataService.getCommonData();
       if (commonDataResponse == null || !commonDataResponse.isSuccess) {
         debugPrint('[DEBUG] ❌ Failed to fetch Common Data');
-        return false;
+        return SyncResult(isSuccess: false);
       }
       debugPrint(
         '[DEBUG] 📦 Common Data items: ${commonDataResponse.data.length}',
@@ -41,7 +48,7 @@ class DataSyncService {
       final busTripsResponse = await _routeService.getBusTrips(plateNo);
       if (busTripsResponse == null || !busTripsResponse.isSuccess) {
         debugPrint('[DEBUG] ❌ Failed to fetch Bus Trips');
-        return false;
+        return SyncResult(isSuccess: false);
       }
       debugPrint('[DEBUG] 📦 Bus Trips items: ${busTripsResponse.data.length}');
 
@@ -65,7 +72,7 @@ class DataSyncService {
           ),
         );
         activeRouteId = activeTrips.first.routeId;
-        debugPrint('[DEBUG] � Found Active Trip! RouteId: $activeRouteId');
+        debugPrint('[DEBUG]  Found Active Trip! RouteId: $activeRouteId');
       } else {
         debugPrint(
           '[DEBUG] ⚠️ No active trip found. Using RouteId: $activeRouteId',
@@ -172,10 +179,10 @@ class DataSyncService {
       }
 
       debugPrint('[DEBUG] ✅ Data Sync Completed Successfully!');
-      return true;
+      return SyncResult(isSuccess: true, activeRouteId: activeRouteId);
     } catch (e) {
       debugPrint('[DEBUG] ❌ Error during Data Sync: $e');
-      return false;
+      return SyncResult(isSuccess: false);
     }
   }
 }

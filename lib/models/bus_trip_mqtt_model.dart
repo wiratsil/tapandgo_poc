@@ -28,10 +28,10 @@ class BusTripMqttData {
       pn: json['pn'] as String,
       bn: json['bn'] as String,
       fs: json['fs'] != null
-          ? DateTime.tryParse(json['fs'].toString())?.toLocal()
+          ? DateTime.tryParse(json['fs'].toString())
           : null,
       td: json['td'] != null
-          ? DateTime.tryParse(json['td'].toString())?.toLocal()
+          ? DateTime.tryParse(json['td'].toString())
           : null,
     );
   }
