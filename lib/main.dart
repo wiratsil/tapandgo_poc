@@ -5,13 +5,14 @@ import 'package:flutter/services.dart';
 import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
-import 'package:cpay_sdk_plugin/cpay_sdk_plugin.dart';
+// import 'package:cpay_sdk_plugin/cpay_sdk_plugin.dart'; // Handled by PosService
 import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'models/transaction_model.dart';
 import 'success_result_screen.dart';
+import 'services/pos_service.dart';
 import 'error_result_screen.dart';
 import 'wifi_sync_screen.dart'; // SettingsScreen
 import 'services/wifi_sync_service.dart';
@@ -59,7 +60,8 @@ class WelcomeScreen extends StatefulWidget {
 
 class _WelcomeScreenState extends State<WelcomeScreen>
     with WidgetsBindingObserver {
-  final _cpaySdkPlugin = CpaySdkPlugin();
+  final _posService = PosService();
+  // final _cpaySdkPlugin = CpaySdkPlugin(); // Refactored into PosService
 
   // Prevent auto sync from running again when returning to this screen
   static bool _hasAutoSynced = false;
@@ -231,7 +233,12 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
       await _loadPlateNumber();
       _loadPendingTransactions();
-      _requestAllPermissions();
+
+      // Initialize POS Service FIRST (Detect Device: Arke or CPay)
+      await _posService.init();
+
+      // Then start scanning (uses device type from PosService)
+      await _requestAllPermissions();
       _setupPendingSyncListener();
       _updateTime();
       _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
@@ -494,6 +501,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     _gpsSubscription?.cancel();
     _mqttService.disconnect();
     _stopBackgroundScanning();
+    _posService.dispose();
     _mobileScannerController?.dispose();
     super.dispose();
   }
@@ -503,7 +511,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     // Cleanup NFC only (camera lifecycle is managed by MobileScanner widget)
     debugPrint('Cleaning up any existing sessions...');
     try {
-      await _cpaySdkPlugin.stopNfcPolling();
+      await _posService.stopNfcPolling();
     } catch (e) {
       debugPrint('Cleanup error (can be ignored): $e');
     }
@@ -576,7 +584,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     await _startQrScanWithRetry();
 
     // Start Background NFC Polling
-    await _startNfcPollingOnly();
+    await _startNfcPollingUnified();
   }
 
   Future<void> _startQrScanWithRetry({int retries = 3}) async {
@@ -606,22 +614,26 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     }
   }
 
-  Future<void> _startNfcPollingOnly() async {
+  Future<void> _startNfcPollingUnified() async {
     try {
-      final nfcStarted = await _cpaySdkPlugin.startNfcPolling(intervalMs: 500);
-      debugPrint('NFC Polling started: $nfcStarted');
+      await _posService.startNfcPolling();
+      debugPrint('Unified NFC Polling started');
 
       _nfcSubscription?.cancel();
-      _nfcSubscription = _cpaySdkPlugin.onNfcCardDetected.listen((cardPresent) {
+      _nfcSubscription = _posService.onNfcCardDetected.listen((cardPresent) {
         if (cardPresent) {
-          print('********** BEACON: NFC Card Detected! **********');
-          debugPrint('NFC Card Detected!');
+          debugPrint('NFC Card Detected via PosService!');
           _handleNfcDetected();
         }
       });
     } catch (e) {
       debugPrint('Failed to start NFC polling: $e');
     }
+  }
+
+  Future<void> _startNfcPollingOnly() async {
+    // Legacy method - redirecting to unified
+    await _startNfcPollingUnified();
   }
 
   Future<void> _stopBackgroundScanning() async {
@@ -639,7 +651,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     try {
       // await _cpaySdkPlugin.stopQrScan(); // Removed cpay QR stop
       await _mobileScannerController?.stop();
-      await _cpaySdkPlugin.stopNfcPolling();
+      await _posService.stopNfcPolling();
     } catch (e) {
       debugPrint('Error stopping background scanning: $e');
     }
@@ -652,7 +664,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     _isProcessing = true;
 
     try {
-      await _cpaySdkPlugin.beep();
+      await _posService.beep();
     } catch (e) {
       debugPrint('Beep Error: $e');
     }
@@ -679,41 +691,19 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
     String cardId;
     try {
-      final emvData = await _cpaySdkPlugin.readCardEmv().timeout(
-        const Duration(milliseconds: 500),
+      final id = await _posService.readCardId().timeout(
+        const Duration(milliseconds: 1500),
         onTimeout: () => null,
       );
-      if (emvData != null && emvData.isNotEmpty) {
-        debugPrint('[NFC] 📄 Raw EMV Data:\n$emvData');
-
-        // Parse AID (priority) or Card No (fallback) from multiline EMV string
-        String? aid;
-        String? cardNo;
-        for (final line in emvData.split('\n')) {
-          final trimmed = line.trim();
-          if (trimmed.startsWith('AID:')) {
-            aid = trimmed.substring(4).trim();
-          } else if (trimmed.startsWith('Card No:')) {
-            cardNo = trimmed.substring(8).trim();
-          }
-        }
-
-        if (aid != null && aid.isNotEmpty) {
-          cardId = aid;
-          debugPrint('[NFC] ✅ Using AID: $cardId');
-        } else if (cardNo != null && cardNo.isNotEmpty) {
-          cardId = cardNo;
-          debugPrint('[NFC] ✅ Using Card No (AID not found): $cardId');
-        } else {
-          cardId = emvData;
-          debugPrint('[NFC] ⚠️ Could not parse AID/CardNo, using raw data');
-        }
+      if (id != null && id.isNotEmpty) {
+        cardId = id;
+        debugPrint('[NFC] ✅ Card ID detected: $cardId');
       } else {
         cardId = 'UNKNOWN-CARD';
-        debugPrint('[NFC] ⚠️ readCardEmv returned null/empty');
+        debugPrint('[NFC] ⚠️ readCardId returned null/empty');
       }
     } catch (e) {
-      debugPrint('[NFC] ❌ Read EMV Failed: $e');
+      debugPrint('[NFC] ❌ Read Card Failed: $e');
       cardId = 'UNKNOWN-CARD';
     }
 
@@ -1286,7 +1276,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       double? deviceLat;
       double? deviceLng;
       try {
-        final locStr = await _cpaySdkPlugin.getLocation().timeout(
+        final locStr = await _posService.getLocation().timeout(
           const Duration(seconds: 3),
           onTimeout: () => null,
         );

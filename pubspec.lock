@@ -9,6 +9,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.7.0"
+  arke_sdk_flutter:
+    dependency: "direct main"
+    description:
+      path: "../SDK/arke_sdk_flutter"
+      relative: true
+    source: path
+    version: "0.0.1"
   async:
     dependency: transitive
     description:
