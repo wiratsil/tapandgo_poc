@@ -18,7 +18,8 @@ dependencies:
       url: https://github.com/wiratsil/cpay_sdk_plugin.git
 
   arke_sdk_flutter:
-    path: ../SDK/arke_sdk_flutter
+    git:
+      url: https://github.com/wiratsil/arke_sdk_flutter.git
 
   http: ^1.1.0
   uuid: ^4.2.0
