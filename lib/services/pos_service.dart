@@ -14,6 +14,13 @@ enum PosType { arke, cpay, unknown }
 /// On Arke devices:
 ///   - NFC is blocking: startNfcScan() blocks until a card is tapped,
 ///     so we run it in a polling loop that emits events to the same stream.
+
+class CardReadResult {
+  final String cardId;
+  final String rawData;
+  CardReadResult(this.cardId, this.rawData);
+}
+
 class PosService {
   static final PosService _instance = PosService._internal();
   factory PosService() => _instance;
@@ -150,15 +157,16 @@ class PosService {
     });
   }
 
-  /// Read card ID.
-  /// - CPay: calls readCardEmv() and parses AID/CardNo.
+  /// Read card ID and raw data.
+  /// - CPay: calls readCardEmv() and parses AID/CardNo. Returns full string as rawData.
   /// - Arke: returns the cached card ID from the polling loop.
-  Future<String?> readCardId() async {
+  Future<CardReadResult?> readCardId() async {
     if (_type == PosType.arke) {
       // Card ID was already read during the polling loop
       final id = _lastArkeCardId;
       _lastArkeCardId = null; // Consume it
-      return id;
+      if (id == null) return null;
+      return CardReadResult(id, id);
     } else {
       try {
         final emvData = await _cpay.readCardEmv();
@@ -175,7 +183,8 @@ class PosService {
             cardNo = trimmed.substring(8).trim();
           }
         }
-        return aid ?? cardNo ?? emvData;
+        final finalId = aid ?? cardNo ?? emvData;
+        return CardReadResult(finalId, emvData);
       } catch (e) {
         debugPrint('[PosService] Cpay Read Error: $e');
         return null;

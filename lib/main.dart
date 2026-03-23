@@ -171,6 +171,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   List<String> _plateChangeErrors = [];
   bool _isAppDisabled = false;
   bool _isOfflineMode = false;
+  String _lastScanLog = '';
   Timer? _timer;
 
   Widget _buildLoadingUI() {
@@ -698,21 +699,31 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     }
 
     String cardId;
+    String rawData = '';
     try {
-      final id = await _posService.readCardId().timeout(
+      final result = await _posService.readCardId().timeout(
         const Duration(milliseconds: 1500),
         onTimeout: () => null,
       );
-      if (id != null && id.isNotEmpty) {
-        cardId = id;
+      if (result != null && result.cardId.isNotEmpty) {
+        cardId = result.cardId;
+        rawData = result.rawData;
         debugPrint('[NFC] ✅ Card ID detected: $cardId');
       } else {
         cardId = 'UNKNOWN-CARD';
+        rawData = 'ไม่มีข้อมูล';
         debugPrint('[NFC] ⚠️ readCardId returned null/empty');
       }
     } catch (e) {
       debugPrint('[NFC] ❌ Read Card Failed: $e');
       cardId = 'UNKNOWN-CARD';
+      rawData = 'Error: $e';
+    }
+
+    if (mounted) {
+      setState(() {
+        _lastScanLog = 'เวลา (NFC): ${_formatDateTime(DateTime.now().toUtc())} (UTC)\n\nข้อมูลดิบ (Raw EMV / UID):\n$rawData';
+      });
     }
 
     final nfcData = QrData(aid: cardId, bal: 100.00);
@@ -802,6 +813,12 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
   Future<void> _processQrString(String rawString) async {
     try {
+      if (mounted) {
+        setState(() {
+          _lastScanLog = 'เวลา: ${_formatDateTime(DateTime.now().toUtc())} (UTC)\n\nข้อมูลดิบ (Raw Data):\n$rawString';
+        });
+      }
+
       QrData qrData;
       try {
         final Map<String, dynamic> data = jsonDecode(rawString);
@@ -1892,6 +1909,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                               gpsStream: _mqttService.gpsStream,
                                               isOfflineMode: _isOfflineMode,
                                               onOfflineModeChanged: _setOfflineMode,
+                                              lastScanLog: _lastScanLog,
                                             ),
                                           ),
                                         );
@@ -2258,6 +2276,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                         gpsStream: _mqttService.gpsStream,
                         isOfflineMode: _isOfflineMode,
                         onOfflineModeChanged: _setOfflineMode,
+                        lastScanLog: _lastScanLog,
                       ),
                     ),
                   );

@@ -24,6 +24,7 @@ class SettingsScreen extends StatefulWidget {
   final Stream<GpsData>? gpsStream;
   final bool isOfflineMode;
   final ValueChanged<bool> onOfflineModeChanged;
+  final String lastScanLog;
 
   const SettingsScreen({
     super.key,
@@ -34,6 +35,7 @@ class SettingsScreen extends StatefulWidget {
     this.gpsStream,
     this.isOfflineMode = false,
     required this.onOfflineModeChanged,
+    this.lastScanLog = '',
   });
 
   @override
@@ -1864,6 +1866,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
               ],
+            ),
+            const Divider(height: 24),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  showDialog(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('ข้อมูลสแกนล่าสุด'),
+                      content: SingleChildScrollView(
+                        child: SelectableText(
+                          widget.lastScanLog.isNotEmpty
+                              ? widget.lastScanLog
+                              : 'ยังไม่มีข้อมูลการสแกนในรอบการใช้งานนี้',
+                        ),
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(ctx).pop(),
+                          child: const Text('ปิด'),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.receipt_long),
+                label: const Text('ดูข้อมูลสแกนล่าสุด (Log)'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blueGrey,
+                  foregroundColor: Colors.white,
+                ),
+              ),
             ),
           ],
         ),
