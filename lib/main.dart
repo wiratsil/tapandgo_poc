@@ -29,8 +29,18 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+class MyHttpOverrides extends HttpOverrides {
+  @override
+  HttpClient createHttpClient(SecurityContext? context) {
+    return super.createHttpClient(context)
+      ..badCertificateCallback =
+          (X509Certificate cert, String host, int port) => true;
+  }
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  HttpOverrides.global = MyHttpOverrides(); // Fix for Android 5 SSL Handshake
   await WakelockPlus.enable();
   runApp(const MyApp());
 }
@@ -445,6 +455,35 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       setState(() {
         _activeRouteId = result.activeRouteId;
       });
+    }
+  }
+
+  Future<void> _handleClearCache() async {
+    // 1. Clear Data in SQLite
+    await _dbHelper.clearAllData();
+
+    // 2. Clear local variables & pending transactions
+    setState(() {
+      _pendingTransactions.clear();
+      _gpsHistory.clear();
+      _lastScanLog = '';
+      _pendingEmvRequests.clear();
+      _pendingTapInGpsQueue.clear();
+      _resolvedTapInGps.clear();
+    });
+
+    // 3. Save (overwrite) pending transactions in SharedPreferences to empty
+    await _savePendingTransactions();
+
+    // 4. Force a re-sync of configuration data
+    _hasAutoSynced = false;
+    await Future.delayed(const Duration(milliseconds: 500));
+    await _syncData();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('✅ ล้างข้อมูลแคชสำเร็จ')),
+      );
     }
   }
 
@@ -1939,6 +1978,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                               isOfflineMode: _isOfflineMode,
                                               onOfflineModeChanged: _setOfflineMode,
                                               lastScanLog: _lastScanLog,
+                                              onClearCache: _handleClearCache,
                                             ),
                                           ),
                                         );
@@ -2306,6 +2346,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                         isOfflineMode: _isOfflineMode,
                         onOfflineModeChanged: _setOfflineMode,
                         lastScanLog: _lastScanLog,
+                        onClearCache: _handleClearCache,
                       ),
                     ),
                   );

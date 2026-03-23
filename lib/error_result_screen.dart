@@ -65,72 +65,81 @@ class _ErrorResultScreenState extends State<ErrorResultScreen> {
                 ),
               ),
 
-              const Spacer(),
-
-              // Warning Icon
-              const Icon(
-                Icons.warning_amber_rounded,
-                size: 100,
-                color: Color(0xFFFFCA28), // Amber color
-              ),
-
-              const SizedBox(height: 24),
-
-              // Main Title
-              Text(
-                widget.errorTitle,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-
-              const SizedBox(height: 32),
-
-              // Error Details Box
-              Container(
-                margin: const EdgeInsets.symmetric(horizontal: 32),
-                padding: const EdgeInsets.symmetric(
-                  vertical: 24,
-                  horizontal: 20,
-                ),
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: Colors.white.withOpacity(0.1)),
-                ),
-                child: Column(
-                  children: [
-                    Text(
-                      widget.errorMessage.split('\n')[0],
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    if (widget.errorMessage.contains('\n')) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        widget.errorMessage.split('\n')[1],
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: Color(
-                            0xFFFFCA28,
-                          ), // Amber text for English/Sub
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
+              Expanded(
+                child: Center(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const SizedBox(height: 16),
+                        // Warning Icon
+                        const Icon(
+                          Icons.warning_amber_rounded,
+                          size: 100,
+                          color: Color(0xFFFFCA28), // Amber color
                         ),
-                      ),
-                    ],
-                  ],
+
+                        const SizedBox(height: 24),
+
+                        // Main Title
+                        Text(
+                          widget.errorTitle,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 28,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+
+                        const SizedBox(height: 32),
+
+                        // Error Details Box
+                        Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 32),
+                          padding: const EdgeInsets.symmetric(
+                            vertical: 24,
+                            horizontal: 20,
+                          ),
+                          width: double.infinity,
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(24),
+                            border: Border.all(color: Colors.white.withOpacity(0.1)),
+                          ),
+                          child: Column(
+                            children: [
+                              Text(
+                                widget.errorMessage.split('\n')[0],
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              if (widget.errorMessage.contains('\n')) ...[
+                                const SizedBox(height: 8),
+                                Text(
+                                  widget.errorMessage.split('\n')[1],
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    color: Color(
+                                      0xFFFFCA28,
+                                    ), // Amber text for English/Sub
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                      ],
+                    ),
+                  ),
                 ),
               ),
-
-              const Spacer(),
 
               // Try Again Button
               Padding(

@@ -25,6 +25,7 @@ class SettingsScreen extends StatefulWidget {
   final bool isOfflineMode;
   final ValueChanged<bool> onOfflineModeChanged;
   final String lastScanLog;
+  final VoidCallback? onClearCache;
 
   const SettingsScreen({
     super.key,
@@ -36,6 +37,7 @@ class SettingsScreen extends StatefulWidget {
     this.isOfflineMode = false,
     required this.onOfflineModeChanged,
     this.lastScanLog = '',
+    this.onClearCache,
   });
 
   @override
@@ -1896,6 +1898,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 label: const Text('ดูข้อมูลสแกนล่าสุด (Log)'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.blueGrey,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  showDialog(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('ยืนยันล้างข้อมูลแคช'),
+                      content: const Text(
+                        'การกระทำนี้จะลบข้อมูลเส้นทาง ป้ายรถเมล์ ประวัติการสแกน และรายการแตะบัตรที่ยังไม่ได้ส่งทั้งหมด\n\n(คุณจะต้องรอให้แอปโหลดข้อมูลเส้นทางใหม่ และรายการแตะเดิมจะหายไป)\n\nคุณแน่ใจหรือไม่?',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(ctx).pop(),
+                          child: const Text('ยกเลิก', style: TextStyle(color: Colors.grey)),
+                        ),
+                        ElevatedButton(
+                          onPressed: () {
+                            Navigator.of(ctx).pop();
+                            if (widget.onClearCache != null) {
+                              widget.onClearCache!();
+                            }
+                          },
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                          child: const Text('ยืนยันล้างข้อมูล', style: TextStyle(color: Colors.white)),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.delete_sweep),
+                label: const Text('ล้างข้อมูลแคชและประวัติ (Clear Cache)'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red.shade600,
                   foregroundColor: Colors.white,
                 ),
               ),
