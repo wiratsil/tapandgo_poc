@@ -12,9 +12,11 @@ packages:
   arke_sdk_flutter:
     dependency: "direct main"
     description:
-      path: "../SDK/arke_sdk_flutter"
-      relative: true
-    source: path
+      path: "."
+      ref: HEAD
+      resolved-ref: "38849249f91da5450c9e998e6b993f19f3c64c32"
+      url: "https://github.com/wiratsil/arke_sdk_flutter.git"
+    source: git
     version: "0.0.1"
   async:
     dependency: transitive

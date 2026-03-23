@@ -22,6 +22,8 @@ class SettingsScreen extends StatefulWidget {
   final Future<void> Function(String newPlate) onPlateChanged;
   final List<GpsData> gpsHistory;
   final Stream<GpsData>? gpsStream;
+  final bool isOfflineMode;
+  final ValueChanged<bool> onOfflineModeChanged;
 
   const SettingsScreen({
     super.key,
@@ -30,6 +32,8 @@ class SettingsScreen extends StatefulWidget {
     required this.onPlateChanged,
     this.gpsHistory = const [],
     this.gpsStream,
+    this.isOfflineMode = false,
+    required this.onOfflineModeChanged,
   });
 
   @override
@@ -63,6 +67,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   // Current plate (can be updated from dialog)
   late String _currentPlateNumber;
+  late bool _localOfflineMode;
 
   // GPS History
   late List<GpsData> _localGpsHistory;
@@ -77,11 +82,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   StreamSubscription<String>? _statusSub;
   StreamSubscription<int>? _clientCountSub;
   StreamSubscription<DiscoveredHost>? _discoveredHostSub;
+  
+  bool _hasInternet = false;
+  Timer? _internetCheckTimer;
 
   @override
   void initState() {
     super.initState();
     _currentPlateNumber = widget.plateNumber;
+    _localOfflineMode = widget.isOfflineMode;
     _localGpsHistory = List<GpsData>.from(widget.gpsHistory);
     _loadSavedHostIp();
     _getLocalIp();
@@ -95,6 +104,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
 
     _restoreStateFromService();
+    
+    // Initial internet check and setup periodic check
+    _checkInternetConnection();
+    _internetCheckTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      _checkInternetConnection();
+    });
+  }
+
+  Future<void> _checkInternetConnection() async {
+    try {
+      final result = await InternetAddress.lookup('google.com')
+          .timeout(const Duration(seconds: 3));
+      final hasInternet = result.isNotEmpty && result[0].rawAddress.isNotEmpty;
+      if (mounted && _hasInternet != hasInternet) {
+        setState(() {
+          _hasInternet = hasInternet;
+        });
+      }
+    } catch (_) {
+      if (mounted && _hasInternet) {
+        setState(() {
+          _hasInternet = false;
+        });
+      }
+    }
   }
 
   Future<void> _loadAppInfo() async {
@@ -221,6 +255,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _statusSub?.cancel();
     _clientCountSub?.cancel();
     _discoveredHostSub?.cancel();
+    _internetCheckTimer?.cancel();
     _syncService.stopDiscovery();
     _hostIpController.dispose();
     _doorLocationController.dispose();
@@ -491,6 +526,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _buildStatusIcon(Icons.qr_code_scanner, true),
                     const SizedBox(width: 8),
                     _buildStatusIcon(Icons.credit_card, true),
+                    const SizedBox(width: 8),
+                    _buildStatusIcon(
+                      _hasInternet ? Icons.wifi : Icons.wifi_off, 
+                      _hasInternet,
+                    ),
                   ],
                 ),
               ),
@@ -614,7 +654,66 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ],
             ),
 
-            const Divider(height: 24),
+            const Divider(height: 16),
+
+            // Offline Mode Toggle
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.electrical_services,
+                    color: Colors.grey,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'โหมดออฟไลน์',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'ข้ามดึงข้อมูล ใช้งานแตะบัตรได้โดยไม่มีเน็ต',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade600,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                Switch(
+                  value: _localOfflineMode,
+                  onChanged: (value) {
+                    setState(() {
+                      _localOfflineMode = value;
+                    });
+                    widget.onOfflineModeChanged(value);
+                    if (!value) {
+                      // Request refresh when turning offline mode OFF
+                      widget.onPlateChanged(_currentPlateNumber);
+                    }
+                  },
+                  activeColor: Colors.deepPurple,
+                ),
+              ],
+            ),
+
+            const Divider(height: 16),
 
             // Route ID
             Row(

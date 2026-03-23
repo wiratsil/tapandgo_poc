@@ -170,6 +170,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   String _plateChangeStatus = '';
   List<String> _plateChangeErrors = [];
   bool _isAppDisabled = false;
+  bool _isOfflineMode = false;
   Timer? _timer;
 
   Widget _buildLoadingUI() {
@@ -228,11 +229,18 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      // Check camera availability before creating controller
       await _checkCameraAvailability();
 
       await _loadPlateNumber();
       _loadPendingTransactions();
+
+      // Check for internet if not in offline mode and plate number is set
+      if (!_isOfflineMode && _plateNumber.isNotEmpty) {
+        final hasInternet = await _checkInternetConnection();
+        if (!hasInternet && mounted) {
+          _promptOfflineMode();
+        }
+      }
 
       // Initialize POS Service FIRST (Detect Device: Arke or CPay)
       await _posService.init();
@@ -721,9 +729,11 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     try {
       final prefs = await SharedPreferences.getInstance();
       final savedPlate = prefs.getString('plate_number');
-      if (savedPlate != null && mounted) {
+      final savedOffline = prefs.getBool('offline_mode') ?? false;
+      if (mounted) {
         setState(() {
-          _plateNumber = savedPlate;
+          if (savedPlate != null) _plateNumber = savedPlate;
+          _isOfflineMode = savedOffline;
         });
       }
 
@@ -924,15 +934,17 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   }
 
   Future<void> _handleTapOut(QrData qrData) async {
-    // Check internet connectivity before Tap Out
-    final hasInternet = await _checkInternetConnection();
-    if (!hasInternet) {
-      _showResultDialog(
-        'ไม่มีสัญญาณอินเทอร์เน็ต',
-        'กรุณาเชื่อมต่ออินเทอร์เน็ตก่อนลงรถ',
-        isSuccess: false,
-      );
-      return;
+    // Check internet connectivity before Tap Out (skip in offline mode)
+    if (!_isOfflineMode) {
+      final hasInternet = await _checkInternetConnection();
+      if (!hasInternet) {
+        _showResultDialog(
+          'ไม่มีสัญญาณอินเทอร์เน็ต',
+          'กรุณาเชื่อมต่ออินเทอร์เน็ตก่อนลงรถ',
+          isSuccess: false,
+        );
+        return;
+      }
     }
 
     final pending = _pendingTransactions[qrData.aid]!;
@@ -1878,6 +1890,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                               },
                                               gpsHistory: _gpsHistory,
                                               gpsStream: _mqttService.gpsStream,
+                                              isOfflineMode: _isOfflineMode,
+                                              onOfflineModeChanged: _setOfflineMode,
                                             ),
                                           ),
                                         );
@@ -1971,7 +1985,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
             ),
 
           // === Disabled overlay when data is incomplete ===
-          if (_isAppDisabled && !_isPlateChanging)
+          if (_isAppDisabled && !_isPlateChanging && !_isOfflineMode)
             Container(
               color: Colors.black54,
               child: Center(
@@ -2012,6 +2026,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                               },
                               gpsHistory: _gpsHistory,
                               gpsStream: _mqttService.gpsStream,
+                              isOfflineMode: _isOfflineMode,
+                              onOfflineModeChanged: _setOfflineMode,
                             ),
                           ),
                         );
@@ -2034,7 +2050,41 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
   // _showEditPlateDialog() ย้ายไปหน้า SettingsScreen แล้ว
 
+  void _promptOfflineMode() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('ไม่มีสัญญาณอินเทอร์เน็ต'),
+        content: const Text(
+          'ตรวจไม่พบการเชื่อมต่ออินเทอร์เน็ตในขณะนี้\nคุณต้องการเปลี่ยนไปใช้งาน "โหมดออฟไลน์" หรือไม่?\n\n(ใช้งานแตะบัตรขึ้น-ลงรถได้ปกติ แต่จะไม่มีการซิงค์ข้อมูลเส้นทางกับเซิร์ฟเวอร์)',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('ยกเลิก', style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              _setOfflineMode(true);
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.deepPurple),
+            child: const Text('ตกลง', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Full plate change flow with loading overlay
+  Future<void> _setOfflineMode(bool value) async {
+    setState(() => _isOfflineMode = value);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('offline_mode', value);
+    debugPrint('[OFFLINE] Mode set to: $value');
+  }
+
   Future<void> _performPlateChange(String newPlate) async {
     setState(() {
       _isPlateChanging = true;
@@ -2071,72 +2121,84 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       debugPrint('[PLATE] ❌ Save prefs error: $e');
     }
 
-    // Step 3: Connect MQTT
-    setState(() => _plateChangeStatus = 'กำลังเชื่อมต่อ MQTT ($newPlate)...');
-    try {
-      final mqttResult = await _mqttService.connect(_plateNumber);
-      if (!mqttResult) {
-        _plateChangeErrors.add('⚠️ เชื่อมต่อ MQTT ไม่สำเร็จ');
-        debugPrint('[PLATE] ⚠️ MQTT connect failed');
-      }
-    } catch (e) {
-      _plateChangeErrors.add('❌ เชื่อมต่อ MQTT ล้มเหลว: $e');
-      debugPrint('[PLATE] ❌ MQTT error: $e');
-    }
-
-    // Step 4: Sync data
-    setState(() => _plateChangeStatus = 'กำลังดาวน์โหลดข้อมูลเส้นทาง...');
-    SyncResult? syncResult;
-    try {
-      final syncService = DataSyncService();
-      syncResult = await syncService.syncAllData(plateNo: _plateNumber);
-      if (!syncResult.isSuccess) {
-        _plateChangeErrors.add('❌ ดึงข้อมูลเส้นทางไม่สำเร็จ');
-        debugPrint('[PLATE] ❌ syncAllData returned failure');
-      } else {
-        if (mounted) {
-          setState(() {
-            _activeRouteId = syncResult?.activeRouteId;
-          });
+    // Step 3: Connect MQTT (skip in offline mode)
+    if (!_isOfflineMode) {
+      setState(() => _plateChangeStatus = 'กำลังเชื่อมต่อ MQTT ($newPlate)...');
+      try {
+        final mqttResult = await _mqttService.connect(_plateNumber);
+        if (!mqttResult) {
+          _plateChangeErrors.add('⚠️ เชื่อมต่อ MQTT ไม่สำเร็จ');
+          debugPrint('[PLATE] ⚠️ MQTT connect failed');
         }
+      } catch (e) {
+        _plateChangeErrors.add('❌ เชื่อมต่อ MQTT ล้มเหลว: $e');
+        debugPrint('[PLATE] ❌ MQTT error: $e');
       }
-    } catch (e) {
-      _plateChangeErrors.add('❌ ดึงข้อมูลเส้นทางล้มเหลว: $e');
-      debugPrint('[PLATE] ❌ Sync error: $e');
+    } else {
+      debugPrint('[PLATE] ⏩ Skipping MQTT connect (offline mode)');
     }
 
-    // Step 5: Verify data completeness
-    setState(() => _plateChangeStatus = 'กำลังตรวจสอบข้อมูล...');
-    try {
-      final db = await _dbHelper.database;
-      final routeCount =
-          Sqflite.firstIntValue(
-            await db.rawQuery('SELECT COUNT(*) FROM route_details'),
-          ) ??
-          0;
-      final priceCount =
-          Sqflite.firstIntValue(
-            await db.rawQuery('SELECT COUNT(*) FROM price_ranges'),
-          ) ??
-          0;
-      final tripCount =
-          Sqflite.firstIntValue(
-            await db.rawQuery('SELECT COUNT(*) FROM bus_trips'),
-          ) ??
-          0;
+    // Step 4: Sync data (skip in offline mode)
+    if (!_isOfflineMode) {
+      setState(() => _plateChangeStatus = 'กำลังดาวน์โหลดข้อมูลเส้นทาง...');
+      SyncResult? syncResult;
+      try {
+        final syncService = DataSyncService();
+        syncResult = await syncService.syncAllData(plateNo: _plateNumber);
+        if (!syncResult.isSuccess) {
+          _plateChangeErrors.add('❌ ดึงข้อมูลเส้นทางไม่สำเร็จ');
+          debugPrint('[PLATE] ❌ syncAllData returned failure');
+        } else {
+          if (mounted) {
+            setState(() {
+              _activeRouteId = syncResult?.activeRouteId;
+            });
+          }
+        }
+      } catch (e) {
+        _plateChangeErrors.add('❌ ดึงข้อมูลเส้นทางล้มเหลว: $e');
+        debugPrint('[PLATE] ❌ Sync error: $e');
+      }
+    } else {
+      debugPrint('[PLATE] ⏩ Skipping data sync (offline mode)');
+    }
 
-      debugPrint(
-        '[PLATE] 📊 Data check: routes=$routeCount prices=$priceCount trips=$tripCount',
-      );
+    // Step 5: Verify data completeness (skip in offline mode)
+    if (!_isOfflineMode) {
+      setState(() => _plateChangeStatus = 'กำลังตรวจสอบข้อมูล...');
+      try {
+        final db = await _dbHelper.database;
+        final routeCount =
+            Sqflite.firstIntValue(
+              await db.rawQuery('SELECT COUNT(*) FROM route_details'),
+            ) ??
+            0;
+        final priceCount =
+            Sqflite.firstIntValue(
+              await db.rawQuery('SELECT COUNT(*) FROM price_ranges'),
+            ) ??
+            0;
+        final tripCount =
+            Sqflite.firstIntValue(
+              await db.rawQuery('SELECT COUNT(*) FROM bus_trips'),
+            ) ??
+            0;
 
-      if (routeCount == 0)
-        _plateChangeErrors.add('⚠️ ไม่พบข้อมูลเส้นทาง (route_details)');
-      if (priceCount == 0)
-        _plateChangeErrors.add('⚠️ ไม่พบข้อมูลราคา (price_ranges)');
-      if (tripCount == 0)
-        _plateChangeErrors.add('⚠️ ไม่พบข้อมูลเที่ยวรถ (bus_trips)');
-    } catch (e) {
-      _plateChangeErrors.add('❌ ตรวจสอบข้อมูลล้มเหลว: $e');
+        debugPrint(
+          '[PLATE] 📊 Data check: routes=$routeCount prices=$priceCount trips=$tripCount',
+        );
+
+        if (routeCount == 0)
+          _plateChangeErrors.add('⚠️ ไม่พบข้อมูลเส้นทาง (route_details)');
+        if (priceCount == 0)
+          _plateChangeErrors.add('⚠️ ไม่พบข้อมูลราคา (price_ranges)');
+        if (tripCount == 0)
+          _plateChangeErrors.add('⚠️ ไม่พบข้อมูลเที่ยวรถ (bus_trips)');
+      } catch (e) {
+        _plateChangeErrors.add('❌ ตรวจสอบข้อมูลล้มเหลว: $e');
+      }
+    } else {
+      debugPrint('[PLATE] ⏩ Skipping data verification (offline mode)');
     }
 
     // Done — show result
@@ -2194,6 +2256,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                         },
                         gpsHistory: _gpsHistory,
                         gpsStream: _mqttService.gpsStream,
+                        isOfflineMode: _isOfflineMode,
+                        onOfflineModeChanged: _setOfflineMode,
                       ),
                     ),
                   );
