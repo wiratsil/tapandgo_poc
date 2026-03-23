@@ -421,20 +421,15 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     );
     try {
       final cameraCount = await cameraChannel.invokeMethod('checkCamera') ?? 0;
+      // We will assume true if the channel is not implemented, just to be safe.
       _hasCamera = cameraCount > 0;
     } catch (e) {
-      debugPrint('Camera check failed: $e');
-      _hasCamera = false;
+      debugPrint('Camera check failed, assuming true for fallback: $e');
+      _hasCamera = true; 
     }
 
-    if (_hasCamera) {
-      _mobileScannerController = MobileScannerController(
-        detectionSpeed: DetectionSpeed.noDuplicates,
-        facing: CameraFacing.front,
-        formats: [BarcodeFormat.qrCode],
-      );
-    } else {
-      debugPrint('[DEBUG] ⚠️ No camera found, MobileScanner disabled');
+    if (!_hasCamera) {
+      debugPrint('[DEBUG] ⚠️ No camera found according to channel');
     }
 
     if (mounted) setState(() {});
@@ -527,29 +522,31 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
     await Future.delayed(const Duration(milliseconds: 300));
 
-    // Request all permissions at once
-    final statuses = await [
-      Permission.camera,
-      Permission.location,
-      Permission.storage,
-    ].request();
+    // Request permissions one by one to avoid conflicts
+    debugPrint('Requesting Camera permission...');
+    final cameraStatus = await Permission.camera.request();
+    debugPrint('Camera permission status: $cameraStatus');
 
-    debugPrint('Permissions status: $statuses');
+    debugPrint('Requesting Location permission...');
+    final locationStatus = await Permission.location.request();
+    debugPrint('Location permission status: $locationStatus');
+
+    debugPrint('Requesting Storage permission...');
+    final storageStatus = await Permission.storage.request();
+    debugPrint('Storage permission status: $storageStatus');
 
     // Handle Camera Logic
-    final cameraStatus = statuses[Permission.camera];
-    if (cameraStatus != null && cameraStatus.isGranted) {
+    if (cameraStatus.isGranted) {
       await _startBackgroundScanning();
-    } else if (cameraStatus != null && cameraStatus.isPermanentlyDenied) {
+    } else if (cameraStatus.isPermanentlyDenied) {
       if (mounted) _showPermissionDeniedDialog('กล้อง');
     } else {
       debugPrint('Camera denied, starting NFC only');
       await _startNfcPollingOnly();
     }
 
-    // Handle Location Logic (Optional: just log for now as it is used on demand)
-    final locationStatus = statuses[Permission.location];
-    if (locationStatus != null && !locationStatus.isGranted) {
+    // Handle Location Logic
+    if (!locationStatus.isGranted) {
       debugPrint('Location permission denied');
     }
   }
@@ -589,38 +586,70 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     debugPrint('Starting background scanning...');
     _isBackgroundScanningActive = true;
 
-    // Start Background QR Scan with retry logic
-    await _startQrScanWithRetry();
+    // Start Background NFC Polling IMMEDIATELY (Do not await to prevent blocking)
+    _startNfcPollingUnified();
 
-    // Start Background NFC Polling
-    await _startNfcPollingUnified();
+    // Start Background QR Scan with retry logic (Do not await)
+    _startQrScanWithRetry();
   }
 
   Future<void> _startQrScanWithRetry({int retries = 3}) async {
-    if (!_hasCamera || _mobileScannerController == null) {
+    if (!_hasCamera) {
       debugPrint('[DEBUG] ⚠️ No camera, skipping QR scan start');
       return;
     }
-    try {
-      await _mobileScannerController!.start();
-      debugPrint('Mobile Scanner started');
 
-      _qrSubscription?.cancel();
-      _qrSubscription = _mobileScannerController!.barcodes.listen((capture) {
-        for (final barcode in capture.barcodes) {
-          if (barcode.rawValue != null) {
-            print(
-              '********** BEACON: QR Detected: ${barcode.rawValue} **********',
-            );
-            debugPrint('QR Code Detected: ${barcode.rawValue}');
-            _handleQrDetected(barcode.rawValue!);
-            break; // Handle only one at a time
-          }
-        }
-      });
+    // Attempt to start with Front Camera first
+    try {
+      _mobileScannerController?.dispose();
+      _mobileScannerController = MobileScannerController(
+        detectionSpeed: DetectionSpeed.noDuplicates,
+        facing: CameraFacing.front,
+        formats: [BarcodeFormat.qrCode],
+      );
+      
+      await _mobileScannerController!.start();
+      debugPrint('Mobile Scanner started (Front Camera)');
+      _setupQrListener();
+      return; // Success, exit function
     } catch (e) {
-      debugPrint('Failed to start Mobile Scanner: $e');
+      debugPrint('Failed to start Front Camera: $e');
     }
+
+    // Fallback to Back Camera
+    try {
+      debugPrint('Falling back to Back Camera...');
+      _mobileScannerController?.dispose();
+      _mobileScannerController = MobileScannerController(
+        detectionSpeed: DetectionSpeed.noDuplicates,
+        facing: CameraFacing.back,
+        formats: [BarcodeFormat.qrCode],
+      );
+      
+      await _mobileScannerController!.start();
+      debugPrint('Mobile Scanner started (Back Camera)');
+      _setupQrListener();
+    } catch (e) {
+      debugPrint('Failed to start Back Camera as well: $e');
+      // Set to null so UI knows scanner is truly unavailable
+      _mobileScannerController = null;
+    }
+  }
+
+  void _setupQrListener() {
+    _qrSubscription?.cancel();
+    _qrSubscription = _mobileScannerController!.barcodes.listen((capture) {
+      for (final barcode in capture.barcodes) {
+        if (barcode.rawValue != null) {
+          print(
+            '********** BEACON: QR Detected: ${barcode.rawValue} **********',
+          );
+          debugPrint('QR Code Detected: ${barcode.rawValue}');
+          _handleQrDetected(barcode.rawValue!);
+          break; // Handle only one at a time
+        }
+      }
+    });
   }
 
   Future<void> _startNfcPollingUnified() async {
