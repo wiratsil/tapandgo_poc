@@ -260,19 +260,38 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       // Set up VAS event listener
       _posService.onVasEvent?.listen((event) {
         debugPrint('[VAS] Event Type: ${event.type}, Data: ${event.data}');
+        
+        // Reset the NFC scan cooldown so ghost scans are ignored right after returning to our app
+        _lastScannedTime = DateTime.now();
+
+        if (mounted) {
+          setState(() {
+            _lastScanLog = 'VAS Event: ${event.type}\nData:\n${event.data}';
+          });
+        }
+
         if (event.type == 'onComplete') {
           // Parse VAS event data
           try {
-            final data = event.data as Map<String, dynamic>? ?? {};
+            Map<String, dynamic> data = {};
+            if (event.data is String) {
+              data = jsonDecode(event.data as String) as Map<String, dynamic>;
+            } else if (event.data is Map) {
+              data = Map<String, dynamic>.from(event.data as Map);
+            }
+
             final amountStr = data['amount']?.toString();
-            if (data['code'] == 0 || data['code'] == '0' || data['code'] == '00') {
-               _showResultDialog('ชำระเงินสำเร็จ', 'ตัดเงินผ่านบัตรเรียบร้อยแล้ว', isSuccess: true, price: amountStr);
+            final code = data['code']?.toString() ?? data['responseCode']?.toString() ?? data['status']?.toString();
+            final msg = data['message']?.toString() ?? data['responseMessage']?.toString() ?? data['error']?.toString() ?? event.data.toString();
+
+            if (code == '1' || code == '0' || code == '00' || code == '200' || code == 'SUCCESS' || code == 'success') {
+               _showResultDialog('ชำระเงินสำเร็จ', 'ตัดเงินผ่านบัตรเรียบร้อยแล้ว', isSuccess: true, isTapOut: true, price: amountStr, topStatus: 'PAYMENT SUCCESS');
             } else {
-               _showResultDialog('ชำระเงินไม่สำเร็จ', data['message']?.toString() ?? 'เกิดข้อผิดพลาดในการตัดเงิน', isSuccess: false);
+               _showResultDialog('ชำระเงินไม่สำเร็จ', 'Code: $code\nMessage: $msg', isSuccess: false);
             }
           } catch (e) {
             debugPrint('[VAS] Parse error: $e');
-            _showResultDialog('ชำระเงินสำเร็จ (ไม่มีสลิป)', 'ชำระเงินสำเร็จ แต่ไม่อ่านข้อมูลเพิ่มเติมได้', isSuccess: true);
+            _showResultDialog('สถานะไม่ชัดเจน', 'Error: $e\n\nRaw Data:\n${event.data}', isSuccess: false);
           }
           if (mounted) {
             setState(() {
@@ -281,7 +300,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
             });
           }
         } else if (event.type == 'onError') {
-           _showResultDialog('ข้อผิดพลาด', 'ไม่สามารถทำรายการได้', isSuccess: false);
+           _showResultDialog('ข้อผิดพลาด', 'ไม่สามารถทำรายการได้\n${event.data}', isSuccess: false);
            if (mounted) {
             setState(() {
               _isProcessing = false;
@@ -571,6 +590,10 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     }
   }
 
+  // Duplicate scan protection
+  String? _lastScannedCardId;
+  DateTime? _lastScannedTime;
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -812,6 +835,20 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         cardId = result.cardId;
         rawData = result.rawData;
         debugPrint('[NFC] ✅ Card ID detected: $cardId');
+
+        // Prevent ghost scans / duplicate taps within 5 seconds
+        if (_lastScannedCardId == cardId && _lastScannedTime != null) {
+          final diff = DateTime.now().difference(_lastScannedTime!);
+          if (diff.inSeconds < 5) {
+            debugPrint('[NFC] 🚫 Ignoring duplicate tap within cooldown');
+            _isProcessing = false;
+            if (mounted) setState(() => _isLoading = false);
+            return;
+          }
+        }
+        _lastScannedCardId = cardId;
+        _lastScannedTime = DateTime.now();
+
       } else {
         cardId = 'UNKNOWN-CARD';
         rawData = 'ไม่มีข้อมูล';

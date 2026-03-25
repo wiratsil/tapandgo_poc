@@ -362,18 +362,18 @@ class _SuccessResultScreenState extends State<SuccessResultScreen> {
                           const SizedBox(height: 30),
 
                           // Main Texts
-                          const Text(
-                            'แตะลงสำเร็จ',
-                            style: TextStyle(
+                          Text(
+                            widget.title,
+                            style: const TextStyle(
                               color: Colors.white,
                               fontSize: 32,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
                           const SizedBox(height: 8),
-                          const Text(
-                            'EXIT RECORDED',
-                            style: TextStyle(
+                          Text(
+                            widget.topStatus ?? 'EXIT RECORDED',
+                            style: const TextStyle(
                               color: Colors.white,
                               fontSize: 16,
                               fontWeight: FontWeight.bold,
@@ -395,43 +395,63 @@ class _SuccessResultScreenState extends State<SuccessResultScreen> {
                               borderRadius: BorderRadius.circular(24),
                               border: Border.all(color: Colors.white24),
                             ),
-                            child: Column(
-                              children: [
-                                const Text(
-                                  'สถานะค่าโดยสาร',
-                                  style: TextStyle(
-                                    color: Colors.white70,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: const [
-                                    Text('⏳', style: TextStyle(fontSize: 24)),
-                                    SizedBox(width: 8),
-                                    Text(
-                                      'รอประมวลผล',
-                                      style: TextStyle(
-                                        color: Color(0xFFFFCC00), // Yellow gold
-                                        fontSize: 22,
-                                        fontWeight: FontWeight.bold,
+                            child: widget.price != null
+                                ? Column(
+                                    children: [
+                                      const Text('สถานะค่าโดยสาร', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                                      const SizedBox(height: 12),
+                                      Row(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          const Text('💰', style: TextStyle(fontSize: 24)),
+                                          const SizedBox(width: 8),
+                                          Text(
+                                            widget.price!.contains('฿') ? widget.price! : '${widget.price} ฿',
+                                            style: const TextStyle(
+                                              color: Color(0xFF4CAF50), // Green
+                                              fontSize: 28,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ],
                                       ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 16),
-                                const Text(
-                                  'ระบบได้รับจุดลงรถของท่านแล้ว\nกำลังคำนวณยอดเงินตามระยะทาง',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    color: Colors.white70,
-                                    fontSize: 13,
-                                    height: 1.5,
+                                      const SizedBox(height: 16),
+                                      Text(
+                                        widget.message,
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.5),
+                                      ),
+                                    ],
+                                  )
+                                : Column(
+                                    children: [
+                                      const Text('สถานะค่าโดยสาร', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                                      const SizedBox(height: 12),
+                                      Row(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: const [
+                                          Text('⏳', style: TextStyle(fontSize: 24)),
+                                          SizedBox(width: 8),
+                                          Text(
+                                            'รอประมวลผล',
+                                            style: TextStyle(
+                                              color: Color(0xFFFFCC00), // Yellow gold
+                                              fontSize: 22,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 16),
+                                      Text(
+                                        widget.message.isNotEmpty && widget.message != 'ยินดีต้อนรับ'
+                                            ? widget.message
+                                            : 'ระบบได้รับจุดลงรถของท่านแล้ว\nกำลังคำนวณยอดเงินตามระยะทาง',
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.5),
+                                      ),
+                                    ],
                                   ),
-                                ),
-                              ],
-                            ),
                           ),
 
                           const Spacer(),
