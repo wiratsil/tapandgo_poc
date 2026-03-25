@@ -5,6 +5,7 @@ class ErrorResultScreen extends StatefulWidget {
   final void Function(BuildContext) onDismiss;
   final String errorMessage;
   final String errorTitle;
+  final String? errorCause;
 
   const ErrorResultScreen({
     super.key,
@@ -12,6 +13,7 @@ class ErrorResultScreen extends StatefulWidget {
     this.errorMessage =
         'ยอดเงินไม่พอ / บัตรไม่ถูกต้อง\nInsufficient Funds / Invalid Card',
     this.errorTitle = 'ทำรายการไม่สำเร็จ',
+    this.errorCause,
   });
 
   @override
@@ -25,7 +27,7 @@ class _ErrorResultScreenState extends State<ErrorResultScreen> {
   void initState() {
     super.initState();
     // Auto-dismiss after 5 seconds same as success screen
-    _timer = Timer(const Duration(seconds: 3), () {
+    _timer = Timer(const Duration(seconds: 10), () {
       if (mounted) {
         widget.onDismiss(context);
       }
@@ -91,7 +93,23 @@ class _ErrorResultScreenState extends State<ErrorResultScreen> {
                           ),
                         ),
 
-                        const SizedBox(height: 32),
+                        if (widget.errorCause != null) ...[
+                          const SizedBox(height: 16),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                            child: Text(
+                              widget.errorCause!,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                color: Color(0xFFFFCA28), // Amber text
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+
+                        const SizedBox(height: 24),
 
                         // Error Details Box
                         Container(
@@ -104,7 +122,8 @@ class _ErrorResultScreenState extends State<ErrorResultScreen> {
                           decoration: BoxDecoration(
                             color: Colors.black.withOpacity(0.2),
                             borderRadius: BorderRadius.circular(24),
-                            border: Border.all(color: Colors.white.withOpacity(0.1)),
+                            border: Border.all(
+                                color: Colors.white.withOpacity(0.1)),
                           ),
                           child: Column(
                             children: [

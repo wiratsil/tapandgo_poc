@@ -287,7 +287,13 @@ class _WelcomeScreenState extends State<WelcomeScreen>
             if (code == '1' || code == '0' || code == '00' || code == '200' || code == 'SUCCESS' || code == 'success') {
                _showResultDialog('ชำระเงินสำเร็จ', 'ตัดเงินผ่านบัตรเรียบร้อยแล้ว', isSuccess: true, isTapOut: true, price: amountStr, topStatus: 'PAYMENT SUCCESS');
             } else {
-               _showResultDialog('ชำระเงินไม่สำเร็จ', 'Code: $code\nMessage: $msg', isSuccess: false);
+               String cause = 'ระบบไม่สามารถดึงเงินจากบัตรได้';
+               if (code == '2') cause = 'แตะบัตรไม่สำเร็จ หรือดึงบัตรออกเร็วเกินไป';
+               else if (code == '-1' || code == 'USER_CANCEL') cause = 'ผู้ใช้ยกเลิกการทำรายการผ่านหน้าเครื่อง';
+               else if (code == '51') cause = 'ยอดเงินในบัตรไม่เพียงพอ';
+               else if (code == '54') cause = 'บัตรหมดอายุ หรือบัตรถูกระงับ';
+
+               _showResultDialog('ชำระเงินไม่สำเร็จ', 'Code: $code\nMessage: $msg', isSuccess: false, instruction: cause);
             }
           } catch (e) {
             debugPrint('[VAS] Parse error: $e');
@@ -1634,6 +1640,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
             onDismiss: handleDismiss,
             errorTitle: title,
             errorMessage: message,
+            errorCause: instruction,
           ),
         ),
       );
