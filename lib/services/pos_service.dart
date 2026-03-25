@@ -82,6 +82,41 @@ class PosService {
     });
   }
 
+  // ==================== VAS Payment (Arke Only) ====================
+
+  /// Initialize VAS service (Bind and Sign In)
+  Future<void> initVas() async {
+    if (_type == PosType.arke) {
+      try {
+        debugPrint('[PosService] Binding VAS Service...');
+        await _arke.vas.bindService();
+        debugPrint('[PosService] VAS Service bound. Signing in...');
+        await _arke.vas.signIn();
+        debugPrint('[PosService] VAS Sign In complete.');
+      } catch (e) {
+        debugPrint('[PosService] VAS init error: $e');
+      }
+    }
+  }
+
+  /// Initiate a VAS sale transaction
+  Future<void> vasSale(double amount) async {
+    if (_type == PosType.arke) {
+      try {
+        debugPrint('[PosService] Initiating VAS Sale for $amount...');
+        final request = VasRequestBody(amount: amount);
+        await _arke.vas.sale(request);
+      } catch (e) {
+        debugPrint('[PosService] VAS sale error: $e');
+      }
+    } else {
+      debugPrint('[PosService] VAS is only supported on Arke devices.');
+    }
+  }
+
+  /// Stream of VAS events (onStart, onNext, onComplete, onError)
+  Stream<VasEvent>? get onVasEvent => _type == PosType.arke ? _arke.vas.vasEvents : null;
+
   // ==================== Beep ====================
 
   Future<void> beep() async {

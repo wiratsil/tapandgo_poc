@@ -255,6 +255,41 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
       // Initialize POS Service FIRST (Detect Device: Arke or CPay)
       await _posService.init();
+      await _posService.initVas(); // Initialize VAS Service
+
+      // Set up VAS event listener
+      _posService.onVasEvent?.listen((event) {
+        debugPrint('[VAS] Event Type: ${event.type}, Data: ${event.data}');
+        if (event.type == 'onComplete') {
+          // Parse VAS event data
+          try {
+            final data = event.data as Map<String, dynamic>? ?? {};
+            final amountStr = data['amount']?.toString();
+            if (data['code'] == 0 || data['code'] == '0' || data['code'] == '00') {
+               _showResultDialog('ชำระเงินสำเร็จ', 'ตัดเงินผ่านบัตรเรียบร้อยแล้ว', isSuccess: true, price: amountStr);
+            } else {
+               _showResultDialog('ชำระเงินไม่สำเร็จ', data['message']?.toString() ?? 'เกิดข้อผิดพลาดในการตัดเงิน', isSuccess: false);
+            }
+          } catch (e) {
+            debugPrint('[VAS] Parse error: $e');
+            _showResultDialog('ชำระเงินสำเร็จ (ไม่มีสลิป)', 'ชำระเงินสำเร็จ แต่ไม่อ่านข้อมูลเพิ่มเติมได้', isSuccess: true);
+          }
+          if (mounted) {
+            setState(() {
+              _isProcessing = false;
+              _isLoading = false;
+            });
+          }
+        } else if (event.type == 'onError') {
+           _showResultDialog('ข้อผิดพลาด', 'ไม่สามารถทำรายการได้', isSuccess: false);
+           if (mounted) {
+            setState(() {
+              _isProcessing = false;
+              _isLoading = false;
+            });
+          }
+        }
+      });
 
       // Then start scanning (uses device type from PosService)
       await _requestAllPermissions();
@@ -797,9 +832,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     final nfcData = QrData(aid: cardId, bal: 100.00);
 
     if (_pendingTransactions.containsKey(nfcData.aid)) {
-      await _handleTapOut(nfcData);
+      await _handleTapOut(nfcData, isNfc: true);
     } else {
-      _handleTapIn(nfcData);
+      await _handleTapIn(nfcData);
     }
   }
 
@@ -897,7 +932,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       }
 
       if (_pendingTransactions.containsKey(qrData.aid)) {
-        await _handleTapOut(qrData);
+        await _handleTapOut(qrData, isNfc: false);
       } else {
         await _handleTapIn(qrData);
       }
@@ -1018,7 +1053,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     );
   }
 
-  Future<void> _handleTapOut(QrData qrData) async {
+  Future<void> _handleTapOut(QrData qrData, {bool isNfc = false}) async {
     // Check internet connectivity before Tap Out (skip in offline mode)
     if (!_isOfflineMode) {
       final hasInternet = await _checkInternetConnection();
@@ -1057,7 +1092,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     final txnItem = TransactionItem(
       txnId: _uuid.v4(),
       assetId: qrData.aid,
-      assetType: 'QR',
+      assetType: isNfc ? 'NFC' : 'QR',
       tapInTime: _formatDateTime(pending.tapInTime),
       tapInLoc: pending.tapInLoc,
       tapOutTime: _formatDateTime(tapOutTime),
@@ -1070,7 +1105,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       transactions: [txnItem],
     );
 
-    await _submitTransaction(payload, qrData.aid, routeId: pending.routeId);
+    await _submitTransaction(payload, qrData.aid, routeId: pending.routeId, isNfc: isNfc);
   }
 
   /// Check if device has internet connection
@@ -1089,6 +1124,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     TransactionRequest payload,
     String aid, {
     int? routeId,
+    bool isNfc = false,
   }) async {
     final url = Uri.parse(
       'https://tng-platform-dev.atlasicloud.com/api/tng/tap/transactions',
@@ -1191,6 +1227,12 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
                 // --- ARKE EMV PAYMENT INTEGRATION (BYPASSED) ---
                 try {
+                  if (isNfc && _posService.isArke) {
+                    debugPrint('[DEBUG] 💳 Triggering VAS Payment for $fare');
+                    await _posService.vasSale(fare.toDouble());
+                    return; // Wait for VAS event callback to handle _showResultDialog
+                  }
+
                   debugPrint(
                     '[DEBUG] 💳 (BYPASSED) Skipping EMV Payment for $fare',
                   );
@@ -1369,18 +1411,30 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         '[EMV] 💰 Fare: $fareAmount (tapInSeq=${tapInStop?.seq}, tapOutSeq=${tapOutStop?.seq})',
       );
 
-      // --- Device GPS (เครื่อง POS) ---
+      // --- Device GPS (เครื่อง POS หรือ โทรศัพท์) ---
       double? deviceLat;
       double? deviceLng;
       try {
+        // 1. ลองดึงจาก SDK ของเครื่อง POS (CPay)
         final locStr = await _posService.getLocation().timeout(
           const Duration(seconds: 3),
           onTimeout: () => null,
         );
+        
         if (locStr != null && locStr.contains(',')) {
           final parts = locStr.split(',');
           deviceLat = double.tryParse(parts[0]);
           deviceLng = double.tryParse(parts[1]);
+        }
+
+        // 2. ถ้าดึงไม่ได้ (เช่น เป็นมือถือทั่วไป หรือ Arke) ให้ใช้ Geolocator
+        if (deviceLat == null || deviceLng == null) {
+          debugPrint('[EMV] ⚠️ POS SDK GPS returned null, falling back to native phone GPS...');
+          final pos = await _locationService.getCurrentPosition();
+          if (pos != null) {
+            deviceLat = pos.latitude;
+            deviceLng = pos.longitude;
+          }
         }
       } catch (e) {
         debugPrint('[EMV] ⚠️ Device GPS unavailable: $e');
