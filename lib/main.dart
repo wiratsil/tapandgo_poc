@@ -25,7 +25,7 @@ import 'services/emv_transaction_service.dart';
 import 'models/emv_transaction_model.dart';
 import 'package:sqflite/sqflite.dart';
 
-import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import 'package:wakelock_plus/wakelock_plus.dart';
 
@@ -90,11 +90,10 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
   // Background Scanning State
   bool _isBackgroundScanningActive = false;
-  bool _hasCamera = false;
+  bool _useDeviceGps = false; // GPS source toggle for NFC fare calculation
 
-  StreamSubscription<Object?>? _qrSubscription;
   StreamSubscription<bool>? _nfcSubscription;
-  MobileScannerController? _mobileScannerController;
+  String _qrCodePayload = ''; // Payload for the generated QR Code
 
   // WiFi Sync for pending transactions
   final WifiSyncService _syncService = WifiSyncService();
@@ -240,8 +239,6 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await _checkCameraAvailability();
-
       await _loadPlateNumber();
       _loadPendingTransactions();
 
@@ -421,8 +418,28 @@ class _WelcomeScreenState extends State<WelcomeScreen>
               gpsData.lng,
             );
 
+            // Create QR payload
+            String newQrPayload = '';
+            if (nearestStop != null) {
+              final activeBusTrip = await _dbHelper.getActiveBusTrip();
+              final routeId = await _dbHelper.getFirstRouteId();
+              final qrPayloadMap = {
+                "busTripInfoId": activeBusTrip?.businfoId ?? 0,
+                "busLineId": activeBusTrip?.buslineId ?? 0,
+                "routeId": activeBusTrip?.routeId ?? routeId ?? 0,
+                "gpsTime": gpsData.rec != null ? gpsData.rec!.toUtc().toIso8601String() : DateTime.now().toUtc().toIso8601String(),
+                "gpsLatitude": gpsData.lat,
+                "gpsLongitude": gpsData.lng,
+                "busStopId": nearestStop.busstopId,
+                "busStopName": nearestStop.busstopDesc,
+                "licensePlate": _plateNumber,
+              };
+              newQrPayload = jsonEncode(qrPayloadMap);
+            }
+
             if (mounted) {
               setState(() {
+                _qrCodePayload = newQrPayload;
                 if (nearestStop != null) {
                   _currentStation = nearestStop.busstopDesc;
                   _currentStationSeq = nearestStop.seq;
@@ -485,25 +502,6 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     });
   }
 
-  Future<void> _checkCameraAvailability() async {
-    const cameraChannel = MethodChannel(
-      'com.example.tapandgo_poc/camera_check',
-    );
-    try {
-      final cameraCount = await cameraChannel.invokeMethod('checkCamera') ?? 0;
-      // We will assume true if the channel is not implemented, just to be safe.
-      _hasCamera = cameraCount > 0;
-    } catch (e) {
-      debugPrint('Camera check failed, assuming true for fallback: $e');
-      _hasCamera = true; 
-    }
-
-    if (!_hasCamera) {
-      debugPrint('[DEBUG] ⚠️ No camera found according to channel');
-    }
-
-    if (mounted) setState(() {});
-  }
 
   Future<void> _syncData() async {
     final syncService = DataSyncService();
@@ -600,6 +598,28 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   String? _lastScannedCardId;
   DateTime? _lastScannedTime;
 
+  // GPS source toggle helper
+  Future<(double, double)> _getGpsForNfc() async {
+    try {
+      final pos = await _locationService.getCurrentPosition();
+      if (pos != null) {
+        debugPrint('[GPS] 📱 Device GPS: lat=${pos.latitude}, lng=${pos.longitude}');
+        return (pos.latitude, pos.longitude);
+      }
+    } catch (e) {
+      debugPrint('[GPS] ❌ Device GPS error: $e');
+    }
+    debugPrint('[GPS] ⚠️ Device GPS unavailable, falling back to MQTT');
+    return (_currentGpsData?.lat ?? 0.0, _currentGpsData?.lng ?? 0.0);
+  }
+
+  void _setUseDeviceGps(bool value) async {
+    setState(() => _useDeviceGps = value);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('use_device_gps', value);
+    debugPrint('[GPS] 🔧 GPS source changed to: ${value ? "Device GPS" : "MQTT GPS"}');
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -609,13 +629,12 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     _mqttService.disconnect();
     _stopBackgroundScanning();
     _posService.dispose();
-    _mobileScannerController?.dispose();
     super.dispose();
   }
 
   // ============ Permission Handling ============
   Future<void> _requestAllPermissions() async {
-    // Cleanup NFC only (camera lifecycle is managed by MobileScanner widget)
+    // Cleanup NFC only
     debugPrint('Cleaning up any existing sessions...');
     try {
       await _posService.stopNfcPolling();
@@ -625,11 +644,6 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
     await Future.delayed(const Duration(milliseconds: 300));
 
-    // Request permissions one by one to avoid conflicts
-    debugPrint('Requesting Camera permission...');
-    final cameraStatus = await Permission.camera.request();
-    debugPrint('Camera permission status: $cameraStatus');
-
     debugPrint('Requesting Location permission...');
     final locationStatus = await Permission.location.request();
     debugPrint('Location permission status: $locationStatus');
@@ -638,45 +652,13 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     final storageStatus = await Permission.storage.request();
     debugPrint('Storage permission status: $storageStatus');
 
-    // Handle Camera Logic
-    if (cameraStatus.isGranted) {
-      await _startBackgroundScanning();
-    } else if (cameraStatus.isPermanentlyDenied) {
-      if (mounted) _showPermissionDeniedDialog('กล้อง');
-    } else {
-      debugPrint('Camera denied, starting NFC only');
-      await _startNfcPollingOnly();
-    }
-
     // Handle Location Logic
     if (!locationStatus.isGranted) {
       debugPrint('Location permission denied');
     }
-  }
 
-  void _showPermissionDeniedDialog(String permissionName) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('ต้องการ Permission $permissionName'),
-        content: Text(
-          'แอปต้องการ Permission $permissionName เพื่อทำงาน กรุณาไปที่ Settings เพื่อเปิด Permission',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('ภายหลัง'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              openAppSettings();
-            },
-            child: const Text('ไปที่ Settings'),
-          ),
-        ],
-      ),
-    );
+    // Start background scanning (which now only handles NFC)
+    await _startBackgroundScanning();
   }
 
   // ============ Background Scanning ============
@@ -691,68 +673,6 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
     // Start Background NFC Polling IMMEDIATELY (Do not await to prevent blocking)
     _startNfcPollingUnified();
-
-    // Start Background QR Scan with retry logic (Do not await)
-    _startQrScanWithRetry();
-  }
-
-  Future<void> _startQrScanWithRetry({int retries = 3}) async {
-    if (!_hasCamera) {
-      debugPrint('[DEBUG] ⚠️ No camera, skipping QR scan start');
-      return;
-    }
-
-    // Attempt to start with Front Camera first
-    try {
-      _mobileScannerController?.dispose();
-      _mobileScannerController = MobileScannerController(
-        detectionSpeed: DetectionSpeed.noDuplicates,
-        facing: CameraFacing.front,
-        formats: [BarcodeFormat.qrCode],
-      );
-      
-      await _mobileScannerController!.start();
-      debugPrint('Mobile Scanner started (Front Camera)');
-      _setupQrListener();
-      return; // Success, exit function
-    } catch (e) {
-      debugPrint('Failed to start Front Camera: $e');
-    }
-
-    // Fallback to Back Camera
-    try {
-      debugPrint('Falling back to Back Camera...');
-      _mobileScannerController?.dispose();
-      _mobileScannerController = MobileScannerController(
-        detectionSpeed: DetectionSpeed.noDuplicates,
-        facing: CameraFacing.back,
-        formats: [BarcodeFormat.qrCode],
-      );
-      
-      await _mobileScannerController!.start();
-      debugPrint('Mobile Scanner started (Back Camera)');
-      _setupQrListener();
-    } catch (e) {
-      debugPrint('Failed to start Back Camera as well: $e');
-      // Set to null so UI knows scanner is truly unavailable
-      _mobileScannerController = null;
-    }
-  }
-
-  void _setupQrListener() {
-    _qrSubscription?.cancel();
-    _qrSubscription = _mobileScannerController!.barcodes.listen((capture) {
-      for (final barcode in capture.barcodes) {
-        if (barcode.rawValue != null) {
-          print(
-            '********** BEACON: QR Detected: ${barcode.rawValue} **********',
-          );
-          debugPrint('QR Code Detected: ${barcode.rawValue}');
-          _handleQrDetected(barcode.rawValue!);
-          break; // Handle only one at a time
-        }
-      }
-    });
   }
 
   Future<void> _startNfcPollingUnified() async {
@@ -772,26 +692,16 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     }
   }
 
-  Future<void> _startNfcPollingOnly() async {
-    // Legacy method - redirecting to unified
-    await _startNfcPollingUnified();
-  }
-
   Future<void> _stopBackgroundScanning() async {
     if (!_isBackgroundScanningActive) return;
 
     debugPrint('Stopping background scanning...');
     _isBackgroundScanningActive = false;
 
-    await _qrSubscription?.cancel();
-    _qrSubscription = null;
-
     await _nfcSubscription?.cancel();
     _nfcSubscription = null;
 
     try {
-      // await _cpaySdkPlugin.stopQrScan(); // Removed cpay QR stop
-      await _mobileScannerController?.stop();
       await _posService.stopNfcPolling();
     } catch (e) {
       debugPrint('Error stopping background scanning: $e');
@@ -799,26 +709,6 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   }
 
   // ============ Event Handlers ============
-  Future<void> _handleQrDetected(String qrCode) async {
-    if (_isProcessing || _isLoading) return;
-
-    _isProcessing = true;
-
-    try {
-      await _posService.beep();
-    } catch (e) {
-      debugPrint('Beep Error: $e');
-    }
-
-    if (mounted) {
-      setState(() {
-        _isLoading = true;
-      });
-    }
-
-    await _processQrString(qrCode);
-  }
-
   Future<void> _handleNfcDetected() async {
     if (_isProcessing || _isLoading) return;
 
@@ -877,7 +767,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     if (_pendingTransactions.containsKey(nfcData.aid)) {
       await _handleTapOut(nfcData, isNfc: true);
     } else {
-      await _handleTapIn(nfcData);
+      await _handleTapIn(nfcData, isNfc: true);
     }
   }
 
@@ -887,10 +777,12 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       final prefs = await SharedPreferences.getInstance();
       final savedPlate = prefs.getString('plate_number');
       final savedOffline = prefs.getBool('offline_mode') ?? false;
+      final savedUseDeviceGps = prefs.getBool('use_device_gps') ?? false;
       if (mounted) {
         setState(() {
           if (savedPlate != null) _plateNumber = savedPlate;
           _isOfflineMode = savedOffline;
+          _useDeviceGps = savedUseDeviceGps;
         });
       }
 
@@ -957,49 +849,24 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     }
   }
 
-  Future<void> _processQrString(String rawString) async {
-    try {
-      if (mounted) {
-        setState(() {
-          _lastScanLog = 'เวลา: ${_formatDateTime(DateTime.now().toUtc())} (UTC)\n\nข้อมูลดิบ (Raw Data):\n$rawString';
-        });
-      }
-
-      QrData qrData;
-      try {
-        final Map<String, dynamic> data = jsonDecode(rawString);
-        qrData = QrData.fromJson(data);
-      } catch (_) {
-        debugPrint('QR is not JSON, using raw string as ID');
-        qrData = QrData(aid: rawString, bal: 0.0);
-      }
-
-      if (_pendingTransactions.containsKey(qrData.aid)) {
-        await _handleTapOut(qrData, isNfc: false);
-      } else {
-        await _handleTapIn(qrData);
-      }
-    } catch (e) {
-      debugPrint('QR Processing Error: $e');
-      _isProcessing = false;
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
-    }
-  }
-
   // ============ Tap In / Tap Out Logic ============
-  Future<void> _handleTapIn(QrData qrData) async {
-    // Get current location (from MQTT GPS)
-    var lat = _currentGpsData?.lat ?? 0.0;
-    var lng = _currentGpsData?.lng ?? 0.0;
-
-    if (lat != 0.0 && lng != 0.0) {
-      debugPrint('[DEBUG] 📍 Using GPS from MQTT: lat=$lat, lng=$lng');
+  Future<void> _handleTapIn(QrData qrData, {bool isNfc = false}) async {
+    // Get current location — check GPS source for NFC
+    double lat;
+    double lng;
+    if (isNfc && _useDeviceGps) {
+      final gps = await _getGpsForNfc();
+      lat = gps.$1;
+      lng = gps.$2;
+      debugPrint('[DEBUG] 📍 Using Device GPS (Tap In): lat=$lat, lng=$lng');
     } else {
-      debugPrint('[DEBUG] ⚠️ GPS not found or 0.0, using Mock Location');
+      lat = _currentGpsData?.lat ?? 0.0;
+      lng = _currentGpsData?.lng ?? 0.0;
+      if (lat != 0.0 && lng != 0.0) {
+        debugPrint('[DEBUG] 📍 Using GPS from MQTT: lat=$lat, lng=$lng');
+      } else {
+        debugPrint('[DEBUG] ⚠️ GPS not found or 0.0, using Mock Location');
+      }
     }
 
     // Get routeId for consistent route filtering
@@ -1113,16 +980,22 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     final pending = _pendingTransactions[qrData.aid]!;
     final tapOutTime = DateTime.now().toUtc();
 
-    // Get current location for Tap Out (from MQTT GPS)
-    var lat = _currentGpsData?.lat ?? 0.0;
-    var lng = _currentGpsData?.lng ?? 0.0;
-
-    if (lat != 0.0 && lng != 0.0) {
-      debugPrint(
-        '[DEBUG] 📍 Using GPS from MQTT (Tap Out): lat=$lat, lng=$lng',
-      );
+    // Get current location for Tap Out — check GPS source for NFC
+    double lat;
+    double lng;
+    if (isNfc && _useDeviceGps) {
+      final gps = await _getGpsForNfc();
+      lat = gps.$1;
+      lng = gps.$2;
+      debugPrint('[DEBUG] 📍 Using Device GPS (Tap Out): lat=$lat, lng=$lng');
     } else {
-      debugPrint('[DEBUG] ⚠️ GPS not found (Tap Out)');
+      lat = _currentGpsData?.lat ?? 0.0;
+      lng = _currentGpsData?.lng ?? 0.0;
+      if (lat != 0.0 && lng != 0.0) {
+        debugPrint('[DEBUG] 📍 Using GPS from MQTT (Tap Out): lat=$lat, lng=$lng');
+      } else {
+        debugPrint('[DEBUG] ⚠️ GPS not found (Tap Out)');
+      }
     }
 
     debugPrint('[DEBUG] 🔎 TapOut Coords Used: $lat, $lng');
@@ -1365,49 +1238,67 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       debugPrint('[EMV] ⏱️ tapInTime: $tapInTime, tapOutTime: $tapOutTime');
 
       // --- TapIn GPS ---
-      final hasResolvedTapIn = _resolvedTapInGps.containsKey(firstTxn.assetId);
-      final tapInGps =
-          _resolvedTapInGps[firstTxn.assetId] ?? _findClosestGps(tapInTime);
-      final tapInGpsLat = tapInGps?.lat ?? firstTxn.tapInLoc.lat;
-      final tapInGpsLng = tapInGps?.lng ?? firstTxn.tapInLoc.lng;
-      debugPrint('[EMV] 📍 TapIn GPS:');
-      debugPrint(
-        '[EMV]   ├─ source: ${hasResolvedTapIn ? "RESOLVED (pre-captured)" : "HISTORY LOOKUP"}',
-      );
-      debugPrint('[EMV]   ├─ gpsTime: ${tapInGps?.rec}');
-      debugPrint('[EMV]   ├─ lat: $tapInGpsLat, lng: $tapInGpsLng');
-      debugPrint('[EMV]   ├─ box: ${tapInGps?.box}, spd: ${tapInGps?.spd}');
-      if (tapInGps == null) {
-        debugPrint('[EMV]   └─ ⚠️ FALLBACK to original transaction lat/lng');
+      double tapInGpsLat;
+      double tapInGpsLng;
+      if (_useDeviceGps) {
+        final gps = await _getGpsForNfc();
+        tapInGpsLat = gps.$1;
+        tapInGpsLng = gps.$2;
+        debugPrint('[EMV] 📍 TapIn GPS: Device GPS lat=$tapInGpsLat, lng=$tapInGpsLng');
       } else {
-        final diffMs =
-            (tapInGps.rec!.millisecondsSinceEpoch -
-                    tapInTime.millisecondsSinceEpoch)
-                .abs();
+        final hasResolvedTapIn = _resolvedTapInGps.containsKey(firstTxn.assetId);
+        final tapInGps =
+            _resolvedTapInGps[firstTxn.assetId] ?? _findClosestGps(tapInTime);
+        tapInGpsLat = tapInGps?.lat ?? firstTxn.tapInLoc.lat;
+        tapInGpsLng = tapInGps?.lng ?? firstTxn.tapInLoc.lng;
+        debugPrint('[EMV] 📍 TapIn GPS:');
         debugPrint(
-          '[EMV]   └─ time diff from tapInTime: ${diffMs}ms (${(diffMs / 1000).toStringAsFixed(1)}s)',
+          '[EMV]   ├─ source: ${hasResolvedTapIn ? "RESOLVED (pre-captured)" : "HISTORY LOOKUP"}',
         );
+        debugPrint('[EMV]   ├─ gpsTime: ${tapInGps?.rec}');
+        debugPrint('[EMV]   ├─ lat: $tapInGpsLat, lng: $tapInGpsLng');
+        debugPrint('[EMV]   ├─ box: ${tapInGps?.box}, spd: ${tapInGps?.spd}');
+        if (tapInGps == null) {
+          debugPrint('[EMV]   └─ ⚠️ FALLBACK to original transaction lat/lng');
+        } else {
+          final diffMs =
+              (tapInGps.rec!.millisecondsSinceEpoch -
+                      tapInTime.millisecondsSinceEpoch)
+                  .abs();
+          debugPrint(
+            '[EMV]   └─ time diff from tapInTime: ${diffMs}ms (${(diffMs / 1000).toStringAsFixed(1)}s)',
+          );
+        }
       }
 
       // --- TapOut GPS ---
-      final tapOutGps = _findClosestGps(tapOutTime);
-      final tapOutGpsLat = tapOutGps?.lat ?? firstTxn.tapOutLoc.lat;
-      final tapOutGpsLng = tapOutGps?.lng ?? firstTxn.tapOutLoc.lng;
-      debugPrint('[EMV] 📍 TapOut GPS:');
-      debugPrint('[EMV]   ├─ source: HISTORY LOOKUP');
-      debugPrint('[EMV]   ├─ gpsTime: ${tapOutGps?.rec}');
-      debugPrint('[EMV]   ├─ lat: $tapOutGpsLat, lng: $tapOutGpsLng');
-      debugPrint('[EMV]   ├─ box: ${tapOutGps?.box}, spd: ${tapOutGps?.spd}');
-      if (tapOutGps == null) {
-        debugPrint('[EMV]   └─ ⚠️ FALLBACK to original transaction lat/lng');
+      double tapOutGpsLat;
+      double tapOutGpsLng;
+      if (_useDeviceGps) {
+        final gps = await _getGpsForNfc();
+        tapOutGpsLat = gps.$1;
+        tapOutGpsLng = gps.$2;
+        debugPrint('[EMV] 📍 TapOut GPS: Device GPS lat=$tapOutGpsLat, lng=$tapOutGpsLng');
       } else {
-        final diffMs =
-            (tapOutGps.rec!.millisecondsSinceEpoch -
-                    tapOutTime.millisecondsSinceEpoch)
-                .abs();
-        debugPrint(
-          '[EMV]   └─ time diff from tapOutTime: ${diffMs}ms (${(diffMs / 1000).toStringAsFixed(1)}s)',
-        );
+        final tapOutGps = _findClosestGps(tapOutTime);
+        tapOutGpsLat = tapOutGps?.lat ?? firstTxn.tapOutLoc.lat;
+        tapOutGpsLng = tapOutGps?.lng ?? firstTxn.tapOutLoc.lng;
+        debugPrint('[EMV] 📍 TapOut GPS:');
+        debugPrint('[EMV]   ├─ source: HISTORY LOOKUP');
+        debugPrint('[EMV]   ├─ gpsTime: ${tapOutGps?.rec}');
+        debugPrint('[EMV]   ├─ lat: $tapOutGpsLat, lng: $tapOutGpsLng');
+        debugPrint('[EMV]   ├─ box: ${tapOutGps?.box}, spd: ${tapOutGps?.spd}');
+        if (tapOutGps == null) {
+          debugPrint('[EMV]   └─ ⚠️ FALLBACK to original transaction lat/lng');
+        } else {
+          final diffMs =
+              (tapOutGps.rec!.millisecondsSinceEpoch -
+                      tapOutTime.millisecondsSinceEpoch)
+                  .abs();
+          debugPrint(
+            '[EMV]   └─ time diff from tapOutTime: ${diffMs}ms (${(diffMs / 1000).toStringAsFixed(1)}s)',
+          );
+        }
       }
 
       // --- Bus Stops ---
@@ -1500,12 +1391,13 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         busstopLongitude: tapInStop?.longitude ?? 0.0, // master data BMS
         busstopDistance: tapInBusstopDist, // ระยะห่าง MQTT GPS <-> bus stop
         gpsbusstopName: tapInStop?.busstopDesc ?? '', // ป้ายใกล้สุดจาก MQTT GPS
-        gpsbusstopLatitude: tapInGpsLat, // MQTT GPS lat
-        gpsbusstopLongitude: tapInGpsLng, // MQTT GPS lng
-        gpsBoxId: tapInGps?.box ?? '',
-        gpsRecDatetime:
-            tapInGps?.rec?.toIso8601String() ?? tapInTime.toIso8601String(),
-        gpsSpeed: tapInGps?.spd ?? 0.0,
+        gpsbusstopLatitude: tapInGpsLat,
+        gpsbusstopLongitude: tapInGpsLng,
+        gpsBoxId: _useDeviceGps ? '' : (_resolvedTapInGps[firstTxn.assetId]?.box ?? _findClosestGps(tapInTime)?.box ?? ''),
+        gpsRecDatetime: _useDeviceGps
+            ? tapInTime.toIso8601String()
+            : (_resolvedTapInGps[firstTxn.assetId]?.rec?.toIso8601String() ?? _findClosestGps(tapInTime)?.rec?.toIso8601String() ?? tapInTime.toIso8601String()),
+        gpsSpeed: _useDeviceGps ? 0.0 : (_resolvedTapInGps[firstTxn.assetId]?.spd ?? _findClosestGps(tapInTime)?.spd ?? 0.0),
       );
 
       // Build EmvTapLocation for tap-out
@@ -1524,12 +1416,13 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         busstopLongitude: tapOutStop?.longitude ?? 0.0,
         busstopDistance: tapOutBusstopDist,
         gpsbusstopName: tapOutStop?.busstopDesc ?? '',
-        gpsbusstopLatitude: tapOutGpsLat, // MQTT GPS lat
-        gpsbusstopLongitude: tapOutGpsLng, // MQTT GPS lng
-        gpsBoxId: tapOutGps?.box ?? '',
-        gpsRecDatetime:
-            tapOutGps?.rec?.toIso8601String() ?? tapOutTime.toIso8601String(),
-        gpsSpeed: tapOutGps?.spd ?? 0.0,
+        gpsbusstopLatitude: tapOutGpsLat,
+        gpsbusstopLongitude: tapOutGpsLng,
+        gpsBoxId: _useDeviceGps ? '' : (_findClosestGps(tapOutTime)?.box ?? ''),
+        gpsRecDatetime: _useDeviceGps
+            ? tapOutTime.toIso8601String()
+            : (_findClosestGps(tapOutTime)?.rec?.toIso8601String() ?? tapOutTime.toIso8601String()),
+        gpsSpeed: _useDeviceGps ? 0.0 : (_findClosestGps(tapOutTime)?.spd ?? 0.0),
       );
 
       // Build EmvFareInfo
@@ -1677,16 +1570,6 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         backgroundColor: Colors.white,
         body: Stack(
           children: [
-            // Hidden MobileScanner widget to keep controller active
-            if (_hasCamera && _mobileScannerController != null)
-              SizedBox(
-                width: 1,
-                height: 1,
-                child: MobileScanner(
-                  controller: _mobileScannerController!,
-                  onDetect: (capture) {}, // Handled by listener
-                ),
-              ),
             _buildLoadingUI(),
           ],
         ),
@@ -1895,57 +1778,17 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                 ),
                                 child: ClipRRect(
                                   borderRadius: BorderRadius.circular(16),
-                                  child: Stack(
-                                    children: [
-                                      if (_hasCamera &&
-                                          _mobileScannerController != null)
-                                        MobileScanner(
-                                          controller: _mobileScannerController!,
-                                          onDetect:
-                                              (
-                                                capture,
-                                              ) {}, // Handled by listener
-                                          fit: BoxFit.cover,
-                                          errorBuilder: (context, error, child) {
-                                            return Center(
-                                              child: Column(
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  const Icon(
-                                                    Icons.error,
-                                                    color: Colors.white,
-                                                    size: 32,
-                                                  ),
-                                                  const SizedBox(height: 8),
-                                                  Text(
-                                                    'Error: ${error.errorCode}',
-                                                    style: const TextStyle(
-                                                      color: Colors.white,
-                                                      fontSize: 12,
-                                                    ),
-                                                    textAlign: TextAlign.center,
-                                                  ),
-                                                ],
-                                              ),
-                                            );
-                                          },
+                                  child: Container(
+                                    color: Colors.white,
+                                    child: _qrCodePayload.isNotEmpty
+                                      ? QrImageView(
+                                          data: _qrCodePayload,
+                                          version: QrVersions.auto,
+                                          padding: const EdgeInsets.all(12),
                                         )
-                                      else
-                                        Center(
-                                          child: Icon(
-                                            Icons.no_photography,
-                                            color: Colors.white54,
-                                            size: 64,
-                                          ),
+                                      : const Center(
+                                          child: CircularProgressIndicator(),
                                         ),
-                                      Center(
-                                        child: Icon(
-                                          Icons.qr_code_scanner,
-                                          size: 100,
-                                          color: Colors.white.withOpacity(0.3),
-                                        ),
-                                      ),
-                                    ],
                                   ),
                                 ),
                               ),
@@ -2077,6 +1920,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                               onOfflineModeChanged: _setOfflineMode,
                                               lastScanLog: _lastScanLog,
                                               onClearCache: _handleClearCache,
+                                              useDeviceGps: _useDeviceGps,
+                                              onUseDeviceGpsChanged: _setUseDeviceGps,
                                             ),
                                           ),
                                         );
@@ -2213,6 +2058,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                               gpsStream: _mqttService.gpsStream,
                               isOfflineMode: _isOfflineMode,
                               onOfflineModeChanged: _setOfflineMode,
+                              useDeviceGps: _useDeviceGps,
+                              onUseDeviceGpsChanged: _setUseDeviceGps,
                             ),
                           ),
                         );
@@ -2445,6 +2292,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                         onOfflineModeChanged: _setOfflineMode,
                         lastScanLog: _lastScanLog,
                         onClearCache: _handleClearCache,
+                        useDeviceGps: _useDeviceGps,
+                        onUseDeviceGpsChanged: _setUseDeviceGps,
                       ),
                     ),
                   );

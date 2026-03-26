@@ -26,6 +26,8 @@ class SettingsScreen extends StatefulWidget {
   final ValueChanged<bool> onOfflineModeChanged;
   final String lastScanLog;
   final VoidCallback? onClearCache;
+  final bool useDeviceGps;
+  final ValueChanged<bool> onUseDeviceGpsChanged;
 
   const SettingsScreen({
     super.key,
@@ -38,6 +40,8 @@ class SettingsScreen extends StatefulWidget {
     required this.onOfflineModeChanged,
     this.lastScanLog = '',
     this.onClearCache,
+    this.useDeviceGps = false,
+    required this.onUseDeviceGpsChanged,
   });
 
   @override
@@ -72,6 +76,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // Current plate (can be updated from dialog)
   late String _currentPlateNumber;
   late bool _localOfflineMode;
+  late bool _localUseDeviceGps;
 
   // GPS History
   late List<GpsData> _localGpsHistory;
@@ -95,6 +100,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _currentPlateNumber = widget.plateNumber;
     _localOfflineMode = widget.isOfflineMode;
+    _localUseDeviceGps = widget.useDeviceGps;
     _localGpsHistory = List<GpsData>.from(widget.gpsHistory);
     _loadSavedHostIp();
     _getLocalIp();
@@ -713,6 +719,61 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     }
                   },
                   activeColor: Colors.deepPurple,
+                ),
+              ],
+            ),
+
+            const Divider(height: 16),
+
+            // GPS Source Toggle (NFC only)
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.teal.withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.gps_fixed,
+                    color: Colors.teal,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'GPS สำหรับคำนวณราคา (NFC)',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _localUseDeviceGps
+                            ? 'Device GPS (มือถือ/POS)'
+                            : 'MQTT GPS (กล่อง GPS รถเมล์)',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Switch(
+                  value: _localUseDeviceGps,
+                  onChanged: (value) {
+                    setState(() {
+                      _localUseDeviceGps = value;
+                    });
+                    widget.onUseDeviceGpsChanged(value);
+                  },
+                  activeColor: Colors.teal,
                 ),
               ],
             ),
