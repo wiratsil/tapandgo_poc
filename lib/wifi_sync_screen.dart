@@ -11,9 +11,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'models/gps_data_model.dart';
-import 'models/route_detail_model.dart';
-import 'models/price_range_model.dart';
 import 'services/database_helper.dart';
+import 'services/pos_service.dart';
 
 /// Settings Screen - รวมข้อมูลรถ, WiFi Sync, และเกี่ยวกับแอป
 class SettingsScreen extends StatefulWidget {
@@ -50,6 +49,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final WifiSyncService _syncService = WifiSyncService();
+  final PosService _posService = PosService();
   final TextEditingController _hostIpController = TextEditingController(
     text: WifiSyncService.defaultHostIp,
   );
@@ -91,7 +91,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   StreamSubscription<String>? _statusSub;
   StreamSubscription<int>? _clientCountSub;
   StreamSubscription<DiscoveredHost>? _discoveredHostSub;
-  
+
   bool _hasInternet = false;
   Timer? _internetCheckTimer;
 
@@ -114,7 +114,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
 
     _restoreStateFromService();
-    
+
     // Initial internet check and setup periodic check
     _checkInternetConnection();
     _internetCheckTimer = Timer.periodic(const Duration(seconds: 10), (_) {
@@ -486,6 +486,131 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Future<void> _showSettlementDialog() async {
+    final amountController = TextEditingController(text: '1.00');
+    final logNoController = TextEditingController();
+    bool isSubmitting = false;
+
+    await showDialog(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: const Text('Settlement จาก POS'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'เรียก Settlement Adjustment ผ่าน SDK ของ POS โดยต้องระบุจำนวนเงินและเลขอ้างอิง (Log No)',
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: amountController,
+                  enabled: !isSubmitting,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: const InputDecoration(
+                    labelText: 'Amount',
+                    hintText: '1.00',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: logNoController,
+                  enabled: !isSubmitting,
+                  decoration: const InputDecoration(
+                    labelText: 'Log No',
+                    hintText: 'กรอกเลขอ้างอิงรายการเดิม',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed:
+                  isSubmitting ? null : () => Navigator.of(dialogContext).pop(),
+              child: const Text('ยกเลิก'),
+            ),
+            ElevatedButton(
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final amount = double.tryParse(amountController.text);
+                      final logNo = logNoController.text.trim();
+                      final messenger = ScaffoldMessenger.of(context);
+                      final navigator = Navigator.of(dialogContext);
+
+                      if (amount == null || amount <= 0) {
+                        messenger.showSnackBar(
+                          const SnackBar(
+                            content: Text('กรุณากรอกจำนวนเงินให้ถูกต้อง'),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                        return;
+                      }
+                      if (logNo.isEmpty) {
+                        messenger.showSnackBar(
+                          const SnackBar(
+                            content: Text('กรุณากรอก Log No'),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                        return;
+                      }
+
+                      setDialogState(() {
+                        isSubmitting = true;
+                      });
+
+                      try {
+                        await _posService.vasSettlementAdjustment(
+                          amount,
+                          logNo,
+                        );
+                        if (!mounted) return;
+                        navigator.pop();
+                        messenger.showSnackBar(
+                          const SnackBar(
+                            content:
+                                Text('ส่งคำสั่ง settlement ไปที่ POS แล้ว'),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                      } catch (e) {
+                        if (mounted) {
+                          messenger.showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                'เรียก settlement ไม่สำเร็จ: $e',
+                              ),
+                              duration: const Duration(seconds: 2),
+                            ),
+                          );
+                        }
+                        setDialogState(() {
+                          isSubmitting = false;
+                        });
+                      }
+                    },
+              child: isSubmitting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('เรียก Settlement'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   // ============ UI Build ============
 
   @override
@@ -538,7 +663,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _buildStatusIcon(Icons.credit_card, true),
                     const SizedBox(width: 8),
                     _buildStatusIcon(
-                      _hasInternet ? Icons.wifi : Icons.wifi_off, 
+                      _hasInternet ? Icons.wifi : Icons.wifi_off,
                       _hasInternet,
                     ),
                   ],
@@ -561,7 +686,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const SizedBox(height: 24),
 
               // ========== Section 3: เกี่ยวกับแอป ==========
-              _buildSectionHeader('เกี่ยวกับแอป', Icons.info_outline, Colors.blueGrey),
+              _buildSectionHeader(
+                  'เกี่ยวกับแอป', Icons.info_outline, Colors.blueGrey),
               const SizedBox(height: 8),
               _buildAboutSection(),
             ],
@@ -571,7 +697,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildSectionHeader(String title, IconData icon, Color color, {Widget? trailing}) {
+  Widget _buildSectionHeader(String title, IconData icon, Color color,
+      {Widget? trailing}) {
     return Row(
       children: [
         Icon(icon, color: color, size: 22),
@@ -877,10 +1004,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: (hasData ? Colors.indigo : Colors.grey).withOpacity(0.1),
+                  color:
+                      (hasData ? Colors.indigo : Colors.grey).withOpacity(0.1),
                   shape: BoxShape.circle,
                 ),
-                child: Icon(Icons.map, color: hasData ? Colors.indigo : Colors.grey, size: 20),
+                child: Icon(Icons.map,
+                    color: hasData ? Colors.indigo : Colors.grey, size: 20),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -896,22 +1025,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ),
                     Text(
-                      hasData ? '$_routeDetailsCount รายการ' : 'ยังไม่มีข้อมูล (ต้อง sync ก่อน)',
-                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                      hasData
+                          ? '$_routeDetailsCount รายการ'
+                          : 'ยังไม่มีข้อมูล (ต้อง sync ก่อน)',
+                      style:
+                          TextStyle(fontSize: 12, color: Colors.grey.shade600),
                     ),
                   ],
                 ),
               ),
               if (hasData) ...[
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
                     color: Colors.indigo.shade50,
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
                     '$_routeDetailsCount',
-                    style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.indigo, fontSize: 13),
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.indigo,
+                        fontSize: 13),
                   ),
                 ),
                 const SizedBox(width: 4),
@@ -939,10 +1075,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: (hasData ? Colors.amber.shade700 : Colors.grey).withOpacity(0.1),
+                  color: (hasData ? Colors.amber.shade700 : Colors.grey)
+                      .withOpacity(0.1),
                   shape: BoxShape.circle,
                 ),
-                child: Icon(Icons.attach_money, color: hasData ? Colors.amber.shade700 : Colors.grey, size: 20),
+                child: Icon(Icons.attach_money,
+                    color: hasData ? Colors.amber.shade700 : Colors.grey,
+                    size: 20),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -958,22 +1097,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ),
                     Text(
-                      hasData ? '$_priceRangesCount รายการ' : 'ยังไม่มีข้อมูล (ต้อง sync ก่อน)',
-                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                      hasData
+                          ? '$_priceRangesCount รายการ'
+                          : 'ยังไม่มีข้อมูล (ต้อง sync ก่อน)',
+                      style:
+                          TextStyle(fontSize: 12, color: Colors.grey.shade600),
                     ),
                   ],
                 ),
               ),
               if (hasData) ...[
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
                     color: Colors.amber.shade50,
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
                     '$_priceRangesCount',
-                    style: TextStyle(fontWeight: FontWeight.bold, color: Colors.amber.shade700, fontSize: 13),
+                    style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.amber.shade700,
+                        fontSize: 13),
                   ),
                 ),
                 const SizedBox(width: 4),
@@ -1004,14 +1150,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             const Icon(Icons.map, color: Colors.indigo, size: 22),
             const SizedBox(width: 8),
-            Expanded(child: Text('Route Details (${data.length})', style: const TextStyle(fontSize: 16))),
+            Expanded(
+                child: Text('Route Details (${data.length})',
+                    style: const TextStyle(fontSize: 16))),
           ],
         ),
         content: SizedBox(
           width: double.maxFinite,
           height: 400,
           child: data.isEmpty
-              ? Center(child: Text('ไม่มีข้อมูล', style: TextStyle(color: Colors.grey.shade400)))
+              ? Center(
+                  child: Text('ไม่มีข้อมูล',
+                      style: TextStyle(color: Colors.grey.shade400)))
               : ListView.builder(
                   itemCount: data.length,
                   itemBuilder: (ctx, i) {
@@ -1024,18 +1174,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             width: 30,
                             child: Text(
                               '${rd.seq}',
-                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
+                              style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  fontFamily: 'monospace'),
                             ),
                           ),
                           if (rd.isExpress)
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 4, vertical: 1),
                               margin: const EdgeInsets.only(right: 4),
                               decoration: BoxDecoration(
                                 color: Colors.red.shade50,
                                 borderRadius: BorderRadius.circular(4),
                               ),
-                              child: const Text('ด่วน', style: TextStyle(fontSize: 9, color: Colors.red)),
+                              child: const Text('ด่วน',
+                                  style: TextStyle(
+                                      fontSize: 9, color: Colors.red)),
                             ),
                           Expanded(
                             child: Text(
@@ -1046,7 +1202,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                           Text(
                             '${rd.latitude.toStringAsFixed(4)},${rd.longitude.toStringAsFixed(4)}',
-                            style: TextStyle(fontSize: 10, color: Colors.grey.shade500, fontFamily: 'monospace'),
+                            style: TextStyle(
+                                fontSize: 10,
+                                color: Colors.grey.shade500,
+                                fontFamily: 'monospace'),
                           ),
                         ],
                       ),
@@ -1055,7 +1214,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('ปิด')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('ปิด')),
         ],
       ),
     );
@@ -1079,14 +1239,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             Icon(Icons.attach_money, color: Colors.amber.shade700, size: 22),
             const SizedBox(width: 8),
-            Expanded(child: Text('Price Ranges (${data.length})', style: const TextStyle(fontSize: 16))),
+            Expanded(
+                child: Text('Price Ranges (${data.length})',
+                    style: const TextStyle(fontSize: 16))),
           ],
         ),
         content: SizedBox(
           width: double.maxFinite,
           height: 400,
           child: data.isEmpty
-              ? Center(child: Text('ไม่มีข้อมูล', style: TextStyle(color: Colors.grey.shade400)))
+              ? Center(
+                  child: Text('ไม่มีข้อมูล',
+                      style: TextStyle(color: Colors.grey.shade400)))
               : Column(
                   children: [
                     // Header
@@ -1094,9 +1258,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       padding: const EdgeInsets.only(bottom: 6),
                       child: Row(
                         children: [
-                          const SizedBox(width: 70, child: Text('ช่วงป้าย', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
-                          const Expanded(child: Text('ราคา', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
-                          const SizedBox(width: 50, child: Text('กลุ่ม', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold), textAlign: TextAlign.right)),
+                          const SizedBox(
+                              width: 70,
+                              child: Text('ช่วงป้าย',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold))),
+                          const Expanded(
+                              child: Text('ราคา',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold))),
+                          const SizedBox(
+                              width: 50,
+                              child: Text('กลุ่ม',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold),
+                                  textAlign: TextAlign.right)),
                         ],
                       ),
                     ),
@@ -1114,20 +1293,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   width: 70,
                                   child: Text(
                                     '${pr.routeDetailStartSeq}→${pr.routeDetailEndSeq}',
-                                    style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+                                    style: const TextStyle(
+                                        fontSize: 12, fontFamily: 'monospace'),
                                   ),
                                 ),
                                 Expanded(
                                   child: Text(
                                     '฿${pr.price.toStringAsFixed(2)}',
-                                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.amber.shade800),
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.amber.shade800),
                                   ),
                                 ),
                                 SizedBox(
                                   width: 50,
                                   child: Text(
                                     '${pr.priceGroupId}',
-                                    style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                                    style: TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.grey.shade600),
                                     textAlign: TextAlign.right,
                                   ),
                                 ),
@@ -1141,7 +1326,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('ปิด')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('ปิด')),
         ],
       ),
     );
@@ -1165,7 +1351,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   color: Colors.teal.withOpacity(0.1),
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.satellite_alt, color: Colors.teal, size: 20),
+                child: const Icon(Icons.satellite_alt,
+                    color: Colors.teal, size: 20),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -1174,13 +1361,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   children: [
                     const Text(
                       'ประวัติ MQTT GPS',
-                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                      style:
+                          TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
                     ),
                     Text(
                       lastGps != null
                           ? 'ล่าสุด: ${_formatGpsTime(lastGps.rec)} | ${lastGps.lat.toStringAsFixed(4)}, ${lastGps.lng.toStringAsFixed(4)}'
                           : 'ยังไม่มีข้อมูล',
-                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                      style:
+                          TextStyle(fontSize: 12, color: Colors.grey.shade600),
                       overflow: TextOverflow.ellipsis,
                     ),
                   ],
@@ -1194,7 +1383,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 child: Text(
                   '${_localGpsHistory.length}',
-                  style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal, fontSize: 13),
+                  style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.teal,
+                      fontSize: 13),
                 ),
               ),
               const SizedBox(width: 4),
@@ -1238,17 +1430,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const Icon(Icons.satellite_alt, color: Colors.teal, size: 22),
                   const SizedBox(width: 8),
                   const Expanded(
-                    child: Text('ประวัติ MQTT GPS', style: TextStyle(fontSize: 16)),
+                    child: Text('ประวัติ MQTT GPS',
+                        style: TextStyle(fontSize: 16)),
                   ),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                     decoration: BoxDecoration(
                       color: Colors.teal.shade50,
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Text(
                       '${dialogHistory.length}',
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.teal),
+                      style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.teal),
                     ),
                   ),
                 ],
@@ -1258,14 +1455,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 height: 400,
                 child: dialogHistory.isEmpty
                     ? Center(
-                        child: Text('ยังไม่มีข้อมูล GPS', style: TextStyle(color: Colors.grey.shade400)),
+                        child: Text('ยังไม่มีข้อมูล GPS',
+                            style: TextStyle(color: Colors.grey.shade400)),
                       )
                     : ListView.builder(
                         reverse: true,
                         itemCount: dialogHistory.length,
                         itemBuilder: (ctx, index) {
                           // reverse: true shows from bottom, so index 0 = last item
-                          final gps = dialogHistory[dialogHistory.length - 1 - index];
+                          final gps =
+                              dialogHistory[dialogHistory.length - 1 - index];
                           return Padding(
                             padding: const EdgeInsets.symmetric(vertical: 3),
                             child: Row(
@@ -1275,14 +1474,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   width: 60,
                                   child: Text(
                                     _formatGpsTime(gps.rec),
-                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, fontFamily: 'monospace'),
+                                    style: const TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                        fontFamily: 'monospace'),
                                   ),
                                 ),
                                 // Lat/Lng
                                 Expanded(
                                   child: Text(
                                     '${gps.lat.toStringAsFixed(5)}, ${gps.lng.toStringAsFixed(5)}',
-                                    style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
+                                    style: const TextStyle(
+                                        fontSize: 11, fontFamily: 'monospace'),
                                     overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
@@ -1291,7 +1494,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   width: 48,
                                   child: Text(
                                     '${gps.spd.toStringAsFixed(0)} km',
-                                    style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                                    style: TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.grey.shade600),
                                     textAlign: TextAlign.right,
                                   ),
                                 ),
@@ -1308,7 +1513,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       setDialogState(() => dialogHistory.clear());
                       setState(() => _localGpsHistory.clear());
                     },
-                    child: const Text('ล้าง', style: TextStyle(color: Colors.red)),
+                    child:
+                        const Text('ล้าง', style: TextStyle(color: Colors.red)),
                   ),
                 TextButton(
                   onPressed: () {
@@ -1379,7 +1585,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                       Text(
                         _status,
-                        style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                        style: TextStyle(
+                            color: Colors.grey.shade600, fontSize: 12),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -1388,7 +1595,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 if (_selectedRole == SyncRole.host)
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
                       color: Colors.blue.shade50,
                       borderRadius: BorderRadius.circular(12),
@@ -1398,7 +1606,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       children: [
                         const Icon(Icons.people, size: 14, color: Colors.blue),
                         const SizedBox(width: 4),
-                        Text('$_clientCount', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue, fontSize: 13)),
+                        Text('$_clientCount',
+                            style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.blue,
+                                fontSize: 13)),
                       ],
                     ),
                   ),
@@ -1414,7 +1626,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           color: Colors.red.withOpacity(0.1),
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(Icons.stop, color: Colors.red, size: 18),
+                        child:
+                            const Icon(Icons.stop, color: Colors.red, size: 18),
                       ),
                     ),
                   ),
@@ -1428,7 +1641,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 children: [
                   const Icon(Icons.wifi, size: 14, color: Colors.grey),
                   const SizedBox(width: 6),
-                  Text('IP: $_localIp', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
+                  Text('IP: $_localIp',
+                      style:
+                          TextStyle(color: Colors.grey.shade500, fontSize: 12)),
                 ],
               ),
             ],
@@ -1447,7 +1662,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         foregroundColor: Colors.deepPurple,
                         side: const BorderSide(color: Colors.deepPurple),
                         padding: const EdgeInsets.symmetric(vertical: 10),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10)),
                       ),
                     ),
                   ),
@@ -1456,12 +1672,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     child: OutlinedButton.icon(
                       onPressed: _showClientConnectDialog,
                       icon: const Icon(Icons.phone_android, size: 16),
-                      label: const Text('Client', style: TextStyle(fontSize: 13)),
+                      label:
+                          const Text('Client', style: TextStyle(fontSize: 13)),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: Colors.blue,
                         side: const BorderSide(color: Colors.blue),
                         padding: const EdgeInsets.symmetric(vertical: 10),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10)),
                       ),
                     ),
                   ),
@@ -1477,7 +1695,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Center(
                 child: Column(
                   children: [
-                    Text('Client สแกน QR เพื่อเชื่อมต่อ', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                    Text('Client สแกน QR เพื่อเชื่อมต่อ',
+                        style: TextStyle(
+                            fontSize: 12, color: Colors.grey.shade600)),
                     const SizedBox(height: 8),
                     Container(
                       padding: const EdgeInsets.all(6),
@@ -1495,7 +1715,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     const SizedBox(height: 4),
                     Text(
                       _syncService.hostIp!,
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, letterSpacing: 1.5),
+                      style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 1.5),
                     ),
                   ],
                 ),
@@ -1516,9 +1739,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         decoration: InputDecoration(
                           labelText: 'ตำแหน่งประตู',
                           labelStyle: const TextStyle(fontSize: 13),
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                          prefixIcon: const Icon(Icons.door_front_door, size: 18),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8)),
+                          prefixIcon:
+                              const Icon(Icons.door_front_door, size: 18),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 8),
                           isDense: true,
                         ),
                       ),
@@ -1534,7 +1760,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.green,
                         foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8)),
                         padding: const EdgeInsets.symmetric(horizontal: 12),
                       ),
                     ),
@@ -1547,14 +1774,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
             if (_selectedRole != SyncRole.none) ...[
               const SizedBox(height: 8),
               Theme(
-                data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                data: Theme.of(context)
+                    .copyWith(dividerColor: Colors.transparent),
                 child: ExpansionTile(
                   tilePadding: EdgeInsets.zero,
                   childrenPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.sync, color: Colors.deepPurple, size: 20),
+                  leading: const Icon(Icons.sync,
+                      color: Colors.deepPurple, size: 20),
                   title: Text(
                     'ข้อมูลที่ Sync (${_syncedData.length})',
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                    style: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.bold),
                   ),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -1564,7 +1794,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           onTap: () => setState(() => _syncedData.clear()),
                           child: const Padding(
                             padding: EdgeInsets.only(right: 8),
-                            child: Icon(Icons.clear_all, size: 18, color: Colors.grey),
+                            child: Icon(Icons.clear_all,
+                                size: 18, color: Colors.grey),
                           ),
                         ),
                       const Icon(Icons.expand_more, size: 20),
@@ -1575,7 +1806,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       Padding(
                         padding: const EdgeInsets.symmetric(vertical: 16),
                         child: Center(
-                          child: Text('ยังไม่มีข้อมูล', style: TextStyle(color: Colors.grey.shade400, fontSize: 13)),
+                          child: Text('ยังไม่มีข้อมูล',
+                              style: TextStyle(
+                                  color: Colors.grey.shade400, fontSize: 13)),
                         ),
                       )
                     else
@@ -1585,7 +1818,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           padding: const EdgeInsets.symmetric(vertical: 4),
                           child: Row(
                             children: [
-                              Icon(Icons.door_front_door, color: Colors.deepPurple.withOpacity(0.5), size: 18),
+                              Icon(Icons.door_front_door,
+                                  color: Colors.deepPurple.withOpacity(0.5),
+                                  size: 18),
                               const SizedBox(width: 8),
                               Expanded(
                                 child: Text(
@@ -1596,7 +1831,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ),
                               Text(
                                 data.id.substring(0, 6),
-                                style: TextStyle(color: Colors.grey.shade400, fontSize: 10, fontFamily: 'monospace'),
+                                style: TextStyle(
+                                    color: Colors.grey.shade400,
+                                    fontSize: 10,
+                                    fontFamily: 'monospace'),
                               ),
                             ],
                           ),
@@ -1699,7 +1937,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           )
                         : const Icon(Icons.search),
                     label: Text(
-                      _isSearchingHosts ? 'กำลังค้นหา...' : '🔍 ค้นหา Host อัตโนมัติ',
+                      _isSearchingHosts
+                          ? 'กำลังค้นหา...'
+                          : '🔍 ค้นหา Host อัตโนมัติ',
                     ),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.orange,
@@ -1710,7 +1950,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 if (_discoveredHosts.isNotEmpty) ...[
                   const SizedBox(height: 16),
-                  const Text('Host ที่พบ:', style: TextStyle(fontWeight: FontWeight.bold)),
+                  const Text('Host ที่พบ:',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
                   const SizedBox(height: 8),
                   Container(
                     constraints: const BoxConstraints(maxHeight: 150),
@@ -1721,7 +1962,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         final host = _discoveredHosts[index];
                         return Card(
                           child: ListTile(
-                            leading: const Icon(Icons.computer, color: Colors.green),
+                            leading:
+                                const Icon(Icons.computer, color: Colors.green),
                             title: Text(host.deviceName),
                             subtitle: Text('${host.ip}:${host.port}'),
                             onTap: () {
@@ -1729,7 +1971,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               setDialogState(() {});
                             },
                             trailing: _hostIpController.text == host.ip
-                                ? const Icon(Icons.check_circle, color: Colors.green)
+                                ? const Icon(Icons.check_circle,
+                                    color: Colors.green)
                                 : null,
                           ),
                         );
@@ -1749,10 +1992,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   decoration: InputDecoration(
                     labelText: 'Host IP',
                     hintText: '192.168.43.1',
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12)),
                     prefixIcon: const Icon(Icons.wifi),
                     suffixIcon: IconButton(
-                      icon: const Icon(Icons.qr_code_scanner, color: Colors.deepPurple),
+                      icon: const Icon(Icons.qr_code_scanner,
+                          color: Colors.deepPurple),
                       onPressed: () async {
                         final scannedIp = await _scanQrCode();
                         if (scannedIp != null && mounted) {
@@ -1789,7 +2034,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<String?> _scanQrCode() async {
-    const cameraChannel = MethodChannel('com.example.tapandgo_poc/camera_check');
+    const cameraChannel =
+        MethodChannel('com.example.tapandgo_poc/camera_check');
     int cameraCount = 0;
     try {
       cameraCount = await cameraChannel.invokeMethod('checkCamera') ?? 0;
@@ -1803,7 +2049,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('ไม่พบกล้อง'),
-          content: const Text('อุปกรณ์นี้ไม่มีกล้อง ไม่สามารถสแกน QR Code ได้\nกรุณาใส่ IP ด้วยตนเอง'),
+          content: const Text(
+              'อุปกรณ์นี้ไม่มีกล้อง ไม่สามารถสแกน QR Code ได้\nกรุณาใส่ IP ด้วยตนเอง'),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
@@ -1819,7 +2066,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context: context,
       builder: (context) {
         return Dialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           child: Container(
             height: 400,
             padding: const EdgeInsets.all(16),
@@ -1934,6 +2182,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
+                onPressed: _showSettlementDialog,
+                icon: const Icon(Icons.point_of_sale),
+                label: const Text('Settlement ผ่าน POS SDK'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.teal,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
                 onPressed: () {
                   showDialog(
                     context: context,
@@ -1978,7 +2239,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       actions: [
                         TextButton(
                           onPressed: () => Navigator.of(ctx).pop(),
-                          child: const Text('ยกเลิก', style: TextStyle(color: Colors.grey)),
+                          child: const Text('ยกเลิก',
+                              style: TextStyle(color: Colors.grey)),
                         ),
                         ElevatedButton(
                           onPressed: () {
@@ -1987,8 +2249,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               widget.onClearCache!();
                             }
                           },
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                          child: const Text('ยืนยันล้างข้อมูล', style: TextStyle(color: Colors.white)),
+                          style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.red),
+                          child: const Text('ยืนยันล้างข้อมูล',
+                              style: TextStyle(color: Colors.white)),
                         ),
                       ],
                     ),

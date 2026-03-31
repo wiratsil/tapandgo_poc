@@ -149,8 +149,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     const R = 6371000.0; // รัศมีโลก (เมตร)
     final dLat = (lat2 - lat1) * 3.141592653589793 / 180;
     final dLng = (lng2 - lng1) * 3.141592653589793 / 180;
-    final a =
-        sin(dLat / 2) * sin(dLat / 2) +
+    final a = sin(dLat / 2) * sin(dLat / 2) +
         cos(lat1 * 3.141592653589793 / 180) *
             cos(lat2 * 3.141592653589793 / 180) *
             sin(dLng / 2) *
@@ -255,7 +254,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       await _posService.initVas(); // Initialize VAS Service
 
       // Set up VAS event listener
-      _posService.onVasEvent?.listen((event) {
+      _posService.onVasEvent?.listen((event) async {
         debugPrint('[VAS] Event Type: ${event.type}, Data: ${event.data}');
 
         // Reset the NFC scan cooldown so ghost scans are ignored right after returning to our app
@@ -293,30 +292,39 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                 code == 'SUCCESS' ||
                 code == 'success') {
               // Extract card info and log number for our custom flow
-              final String? cardNumber = data['cardNumber']?.toString() ?? 
-                  data['cardNo']?.toString();
+              final String? cardNumber =
+                  data['cardNumber']?.toString() ?? data['cardNo']?.toString();
               final String? logNo = data['logNo']?.toString() ??
                   data['voucherNumber']?.toString() ??
                   data['referenceNumber']?.toString();
 
               if (cardNumber != null && cardNumber.isNotEmpty) {
+                final pendingKey = _findPendingTransactionKey(cardNumber);
                 debugPrint(
                     '[VAS] ✅ Sale 1 THB Success. Card: $cardNumber, LogNo: $logNo');
 
+                debugPrint(
+                  '[VAS] Pending lookup => raw="$cardNumber", normalized="${_normalizeCardKey(cardNumber)}", matchedKey="$pendingKey", pendingKeys=${_pendingTransactions.keys.toList()}',
+                );
+
                 // Determine if this is Tap In or Tap Out based on cardNumber
                 // We use aid as a primary key, so we'll map cardNumber to aid
-                final nfcData = QrData(aid: cardNumber, bal: 100.00);
+                final nfcData = QrData(
+                  aid: pendingKey ?? _normalizeCardKey(cardNumber),
+                  bal: 100.00,
+                );
 
-                if (_pendingTransactions.containsKey(nfcData.aid)) {
-                  _handleTapOut(nfcData,
+                if (pendingKey != null) {
+                  await _handleTapOut(nfcData,
                       isNfc: true, cardNumber: cardNumber, logNo: logNo);
                 } else {
-                  _handleTapIn(nfcData,
+                  await _handleTapIn(nfcData,
                       isNfc: true, cardNumber: cardNumber, logNo: logNo);
                 }
               } else {
                 // Should not happen for a successful sale
-                _showResultDialog('ชำระเงินสำเร็จ', 'ตัดเงินผ่านบัตรเรียบร้อยแล้ว',
+                _showResultDialog(
+                    'ชำระเงินสำเร็จ', 'ตัดเงินผ่านบัตรเรียบร้อยแล้ว',
                     isSuccess: true,
                     isTapOut: true,
                     topStatus: 'PAYMENT SUCCESS');
@@ -333,29 +341,19 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                 cause = 'บัตรหมดอายุ หรือบัตรถูกระงับ';
               }
 
-              _showResultDialog('ชำระเงินไม่สำเร็จ', 'Code: $code\nMessage: $msg',
+              _showResultDialog(
+                  'ชำระเงินไม่สำเร็จ', 'Code: $code\nMessage: $msg',
                   isSuccess: false, instruction: cause);
             }
           } catch (e) {
             debugPrint('[VAS] Parse error: $e');
-            _showResultDialog('สถานะไม่ชัดเจน', 'Error: $e\n\nRaw Data:\n${event.data}',
+            _showResultDialog(
+                'สถานะไม่ชัดเจน', 'Error: $e\n\nRaw Data:\n${event.data}',
                 isSuccess: false);
-          }
-          if (mounted) {
-            setState(() {
-              _isProcessing = false;
-              _isLoading = false;
-            });
           }
         } else if (event.type == 'onError') {
           _showResultDialog('ข้อผิดพลาด', 'ไม่สามารถทำรายการได้\n${event.data}',
               isSuccess: false);
-          if (mounted) {
-            setState(() {
-              _isProcessing = false;
-              _isLoading = false;
-            });
-          }
         }
       });
 
@@ -473,7 +471,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                 "busTripInfoId": activeBusTrip?.businfoId ?? 0,
                 "busLineId": activeBusTrip?.buslineId ?? 0,
                 "routeId": activeBusTrip?.routeId ?? routeId ?? 0,
-                "gpsTime": gpsData.rec != null ? gpsData.rec!.toUtc().toIso8601String() : DateTime.now().toUtc().toIso8601String(),
+                "gpsTime": gpsData.rec != null
+                    ? gpsData.rec!.toUtc().toIso8601String()
+                    : DateTime.now().toUtc().toIso8601String(),
                 "gpsLatitude": gpsData.lat,
                 "gpsLongitude": gpsData.lng,
                 "busStopId": nearestStop.busstopId,
@@ -547,7 +547,6 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       }
     });
   }
-
 
   Future<void> _syncData() async {
     final syncService = DataSyncService();
@@ -649,7 +648,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     try {
       final pos = await _locationService.getCurrentPosition();
       if (pos != null) {
-        debugPrint('[GPS] 📱 Device GPS: lat=${pos.latitude}, lng=${pos.longitude}');
+        debugPrint(
+            '[GPS] 📱 Device GPS: lat=${pos.latitude}, lng=${pos.longitude}');
         return (pos.latitude, pos.longitude);
       }
     } catch (e) {
@@ -663,7 +663,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     setState(() => _useDeviceGps = value);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('use_device_gps', value);
-    debugPrint('[GPS] 🔧 GPS source changed to: ${value ? "Device GPS" : "MQTT GPS"}');
+    debugPrint(
+        '[GPS] 🔧 GPS source changed to: ${value ? "Device GPS" : "MQTT GPS"}');
   }
 
   @override
@@ -861,6 +862,32 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     }
   }
 
+  String _normalizeCardKey(String value) {
+    return value.replaceAll(RegExp(r'[^A-Za-z0-9]'), '').toUpperCase();
+  }
+
+  String? _findPendingTransactionKey(String rawCardNumber) {
+    final normalizedInput = _normalizeCardKey(rawCardNumber);
+
+    if (_pendingTransactions.containsKey(rawCardNumber)) {
+      return rawCardNumber;
+    }
+
+    for (final entry in _pendingTransactions.entries) {
+      final pendingKey = _normalizeCardKey(entry.key);
+      final pendingCardNumber = entry.value.cardNumber == null
+          ? ''
+          : _normalizeCardKey(entry.value.cardNumber!);
+
+      if (pendingKey == normalizedInput ||
+          pendingCardNumber == normalizedInput) {
+        return entry.key;
+      }
+    }
+
+    return null;
+  }
+
   // ============ Tap In / Tap Out Logic ============
   Future<void> _handleTapIn(QrData qrData,
       {bool isNfc = false, String? cardNumber, String? logNo}) async {
@@ -921,6 +948,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     setState(() {
       _pendingTransactions[qrData.aid] = pending;
     });
+    debugPrint(
+      '[TAP] Stored pending => key="${qrData.aid}", cardNumber="$cardNumber", pendingKeys=${_pendingTransactions.keys.toList()}',
+    );
     await _savePendingTransactions();
 
     // Queue TapIn GPS resolution — รอ GPS ที่เวลาเลย tapInTime ก่อน resolve
@@ -1008,7 +1038,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       lat = _currentGpsData?.lat ?? 0.0;
       lng = _currentGpsData?.lng ?? 0.0;
       if (lat != 0.0 && lng != 0.0) {
-        debugPrint('[DEBUG] 📍 Using GPS from MQTT (Tap Out): lat=$lat, lng=$lng');
+        debugPrint(
+            '[DEBUG] 📍 Using GPS from MQTT (Tap Out): lat=$lat, lng=$lng');
       } else {
         debugPrint('[DEBUG] ⚠️ GPS not found (Tap Out)');
       }
@@ -1080,8 +1111,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         if (_syncService.isRunning) {
           final pendingSync = PendingTransactionSync(
             aid: aid,
-            tapInTime: DateTime.now()
-                .toUtc(), // Time doesn't matter for removal
+            tapInTime:
+                DateTime.now().toUtc(), // Time doesn't matter for removal
             isRemove: true,
           );
           await _syncService.sendPendingSync(pendingSync);
@@ -1168,6 +1199,16 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                     // In the new flow, we don't call vasSale(fare) here.
                     // Instead, we wait for _submitEmvTransaction to call vasSettlementAdjustment.
                     // But we still need to wait for GPS to resolve.
+                    _showResultDialog(
+                      busStopName,
+                      'กำลังดำเนินการ settlement ที่เครื่อง POS',
+                      isSuccess: true,
+                      isTapOut: true,
+                      price: priceDisplay,
+                      balance: '475.00 ฿',
+                      topStatus: 'บันทึกจุดลงรถแล้ว',
+                      instruction: 'ระบบจะปรับยอดผ่าน POS อัตโนมัติ',
+                    );
                     return;
                   }
 
@@ -1266,9 +1307,11 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         final gps = await _getGpsForNfc();
         tapInGpsLat = gps.$1;
         tapInGpsLng = gps.$2;
-        debugPrint('[EMV] 📍 TapIn GPS: Device GPS lat=$tapInGpsLat, lng=$tapInGpsLng');
+        debugPrint(
+            '[EMV] 📍 TapIn GPS: Device GPS lat=$tapInGpsLat, lng=$tapInGpsLng');
       } else {
-        final hasResolvedTapIn = _resolvedTapInGps.containsKey(firstTxn.assetId);
+        final hasResolvedTapIn =
+            _resolvedTapInGps.containsKey(firstTxn.assetId);
         final tapInGps =
             _resolvedTapInGps[firstTxn.assetId] ?? _findClosestGps(tapInTime);
         tapInGpsLat = tapInGps?.lat ?? firstTxn.tapInLoc.lat;
@@ -1283,10 +1326,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         if (tapInGps == null) {
           debugPrint('[EMV]   └─ ⚠️ FALLBACK to original transaction lat/lng');
         } else {
-          final diffMs =
-              (tapInGps.rec!.millisecondsSinceEpoch -
-                      tapInTime.millisecondsSinceEpoch)
-                  .abs();
+          final diffMs = (tapInGps.rec!.millisecondsSinceEpoch -
+                  tapInTime.millisecondsSinceEpoch)
+              .abs();
           debugPrint(
             '[EMV]   └─ time diff from tapInTime: ${diffMs}ms (${(diffMs / 1000).toStringAsFixed(1)}s)',
           );
@@ -1300,7 +1342,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         final gps = await _getGpsForNfc();
         tapOutGpsLat = gps.$1;
         tapOutGpsLng = gps.$2;
-        debugPrint('[EMV] 📍 TapOut GPS: Device GPS lat=$tapOutGpsLat, lng=$tapOutGpsLng');
+        debugPrint(
+            '[EMV] 📍 TapOut GPS: Device GPS lat=$tapOutGpsLat, lng=$tapOutGpsLng');
       } else {
         final tapOutGps = _findClosestGps(tapOutTime);
         tapOutGpsLat = tapOutGps?.lat ?? firstTxn.tapOutLoc.lat;
@@ -1313,10 +1356,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         if (tapOutGps == null) {
           debugPrint('[EMV]   └─ ⚠️ FALLBACK to original transaction lat/lng');
         } else {
-          final diffMs =
-              (tapOutGps.rec!.millisecondsSinceEpoch -
-                      tapOutTime.millisecondsSinceEpoch)
-                  .abs();
+          final diffMs = (tapOutGps.rec!.millisecondsSinceEpoch -
+                  tapOutTime.millisecondsSinceEpoch)
+              .abs();
           debugPrint(
             '[EMV]   └─ time diff from tapOutTime: ${diffMs}ms (${(diffMs / 1000).toStringAsFixed(1)}s)',
           );
@@ -1355,8 +1397,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       // --- Fare ---
       double fareAmount = 0.0;
       if (tapInStop != null && tapOutStop != null) {
-        fareAmount =
-            await _dbHelper.getFare(
+        fareAmount = await _dbHelper.getFare(
               tapInStop.seq,
               tapOutStop.seq,
               routeId: routeId,
@@ -1373,10 +1414,10 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       try {
         // 1. ลองดึงจาก SDK ของเครื่อง POS (CPay)
         final locStr = await _posService.getLocation().timeout(
-          const Duration(seconds: 3),
-          onTimeout: () => null,
-        );
-        
+              const Duration(seconds: 3),
+              onTimeout: () => null,
+            );
+
         if (locStr != null && locStr.contains(',')) {
           final parts = locStr.split(',');
           deviceLat = double.tryParse(parts[0]);
@@ -1385,7 +1426,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
         // 2. ถ้าดึงไม่ได้ (เช่น เป็นมือถือทั่วไป หรือ Arke) ให้ใช้ Geolocator
         if (deviceLat == null || deviceLng == null) {
-          debugPrint('[EMV] ⚠️ POS SDK GPS returned null, falling back to native phone GPS...');
+          debugPrint(
+              '[EMV] ⚠️ POS SDK GPS returned null, falling back to native phone GPS...');
           final pos = await _locationService.getCurrentPosition();
           if (pos != null) {
             deviceLat = pos.latitude;
@@ -1415,11 +1457,21 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         gpsbusstopName: tapInStop?.busstopDesc ?? '', // ป้ายใกล้สุดจาก MQTT GPS
         gpsbusstopLatitude: tapInGpsLat,
         gpsbusstopLongitude: tapInGpsLng,
-        gpsBoxId: _useDeviceGps ? '' : (_resolvedTapInGps[firstTxn.assetId]?.box ?? _findClosestGps(tapInTime)?.box ?? ''),
+        gpsBoxId: _useDeviceGps
+            ? ''
+            : (_resolvedTapInGps[firstTxn.assetId]?.box ??
+                _findClosestGps(tapInTime)?.box ??
+                ''),
         gpsRecDatetime: _useDeviceGps
             ? tapInTime.toIso8601String()
-            : (_resolvedTapInGps[firstTxn.assetId]?.rec?.toIso8601String() ?? _findClosestGps(tapInTime)?.rec?.toIso8601String() ?? tapInTime.toIso8601String()),
-        gpsSpeed: _useDeviceGps ? 0.0 : (_resolvedTapInGps[firstTxn.assetId]?.spd ?? _findClosestGps(tapInTime)?.spd ?? 0.0),
+            : (_resolvedTapInGps[firstTxn.assetId]?.rec?.toIso8601String() ??
+                _findClosestGps(tapInTime)?.rec?.toIso8601String() ??
+                tapInTime.toIso8601String()),
+        gpsSpeed: _useDeviceGps
+            ? 0.0
+            : (_resolvedTapInGps[firstTxn.assetId]?.spd ??
+                _findClosestGps(tapInTime)?.spd ??
+                0.0),
       );
 
       // Build EmvTapLocation for tap-out
@@ -1443,8 +1495,10 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         gpsBoxId: _useDeviceGps ? '' : (_findClosestGps(tapOutTime)?.box ?? ''),
         gpsRecDatetime: _useDeviceGps
             ? tapOutTime.toIso8601String()
-            : (_findClosestGps(tapOutTime)?.rec?.toIso8601String() ?? tapOutTime.toIso8601String()),
-        gpsSpeed: _useDeviceGps ? 0.0 : (_findClosestGps(tapOutTime)?.spd ?? 0.0),
+            : (_findClosestGps(tapOutTime)?.rec?.toIso8601String() ??
+                tapOutTime.toIso8601String()),
+        gpsSpeed:
+            _useDeviceGps ? 0.0 : (_findClosestGps(tapOutTime)?.spd ?? 0.0),
       );
 
       // Build EmvFareInfo
@@ -1502,8 +1556,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         if (pending.logNo != null) {
           debugPrint(
               '[EMV] 💰 Triggering VAS Settlement Adjustment: Amount=$fareAmount, LogNo=${pending.logNo}');
-          await _posService.vasSettlementAdjustment(
-              fareAmount, pending.logNo!);
+          await _posService.vasSettlementAdjustment(fareAmount, pending.logNo!);
         } else {
           debugPrint(
               '[EMV] ⚠️ Cannot adjust settlement: logNo is null for txnId ${firstTxn.txnId}');
@@ -1532,11 +1585,12 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
     _stopBackgroundScanning();
 
-    setState(() {
-      _isLoading = false;
-    });
-
     void handleDismiss(BuildContext ctx) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
       if (Navigator.of(ctx).canPop()) {
         Navigator.of(ctx).pop();
       }
@@ -1544,7 +1598,10 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         setState(() {
           _isProcessing = false;
         });
-        _startBackgroundScanning();
+        Future<void>.delayed(const Duration(milliseconds: 500), () async {
+          if (!mounted || _isBackgroundScanningActive) return;
+          await _startBackgroundScanning();
+        });
       }
     }
 
@@ -1824,14 +1881,14 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                   child: Container(
                                     color: Colors.white,
                                     child: _qrCodePayload.isNotEmpty
-                                      ? QrImageView(
-                                          data: _qrCodePayload,
-                                          version: QrVersions.auto,
-                                          padding: const EdgeInsets.all(12),
-                                        )
-                                      : const Center(
-                                          child: CircularProgressIndicator(),
-                                        ),
+                                        ? QrImageView(
+                                            data: _qrCodePayload,
+                                            version: QrVersions.auto,
+                                            padding: const EdgeInsets.all(12),
+                                          )
+                                        : const Center(
+                                            child: CircularProgressIndicator(),
+                                          ),
                                   ),
                                 ),
                               ),
@@ -1877,10 +1934,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                   ),
                                   const SizedBox(width: 12),
                                   ElevatedButton.icon(
-                                    onPressed:
-                                        _pendingTransactions.containsKey(
-                                          'SIM-CARD-001',
-                                        )
+                                    onPressed: _pendingTransactions.containsKey(
+                                      'SIM-CARD-001',
+                                    )
                                         ? () => _simulateTap(isTapOut: true)
                                         : null,
                                     icon: const Icon(Icons.logout, size: 18),
@@ -1945,7 +2001,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                     ),
                                     const SizedBox(width: 16),
 
-                                     // Removed Status Icons here
+                                    // Removed Status Icons here
                                     // Settings Button
                                     GestureDetector(
                                       onTap: () async {
@@ -1955,23 +2011,30 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                               plateNumber: _plateNumber,
                                               activeRouteId: _activeRouteId,
                                               onPlateChanged: (newPlate) async {
-                                                await _performPlateChange(newPlate);
+                                                await _performPlateChange(
+                                                    newPlate);
                                               },
                                               gpsHistory: _gpsHistory,
                                               gpsStream: _mqttService.gpsStream,
                                               isOfflineMode: _isOfflineMode,
-                                              onOfflineModeChanged: _setOfflineMode,
+                                              onOfflineModeChanged:
+                                                  _setOfflineMode,
                                               lastScanLog: _lastScanLog,
                                               onClearCache: _handleClearCache,
                                               useDeviceGps: _useDeviceGps,
-                                              onUseDeviceGpsChanged: _setUseDeviceGps,
+                                              onUseDeviceGpsChanged:
+                                                  _setUseDeviceGps,
                                             ),
                                           ),
                                         );
                                         // Refresh plate from SharedPreferences when returning
-                                        final prefs = await SharedPreferences.getInstance();
-                                        final savedPlate = prefs.getString('plate_number') ?? '';
-                                        if (mounted && savedPlate != _plateNumber) {
+                                        final prefs = await SharedPreferences
+                                            .getInstance();
+                                        final savedPlate =
+                                            prefs.getString('plate_number') ??
+                                                '';
+                                        if (mounted &&
+                                            savedPlate != _plateNumber) {
                                           setState(() {
                                             _plateNumber = savedPlate;
                                           });
@@ -2121,8 +2184,6 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     );
   }
 
-
-
   // _showEditPlateDialog() ย้ายไปหน้า SettingsScreen แล้ว
 
   void _promptOfflineMode() {
@@ -2243,18 +2304,15 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       setState(() => _plateChangeStatus = 'กำลังตรวจสอบข้อมูล...');
       try {
         final db = await _dbHelper.database;
-        final routeCount =
-            Sqflite.firstIntValue(
+        final routeCount = Sqflite.firstIntValue(
               await db.rawQuery('SELECT COUNT(*) FROM route_details'),
             ) ??
             0;
-        final priceCount =
-            Sqflite.firstIntValue(
+        final priceCount = Sqflite.firstIntValue(
               await db.rawQuery('SELECT COUNT(*) FROM price_ranges'),
             ) ??
             0;
-        final tripCount =
-            Sqflite.firstIntValue(
+        final tripCount = Sqflite.firstIntValue(
               await db.rawQuery('SELECT COUNT(*) FROM bus_trips'),
             ) ??
             0;

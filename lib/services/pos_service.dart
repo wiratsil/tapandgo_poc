@@ -40,6 +40,7 @@ class PosService {
 
   // Arke NFC polling
   bool _arkeNfcPollingActive = false;
+  int _arkeNfcPollingSession = 0;
 
   // Store last read card ID from Arke (since Arke reads during poll)
   String? _lastArkeCardId;
@@ -119,7 +120,8 @@ class PosService {
   Future<void> vasSettlementAdjustment(double amount, String logNo) async {
     if (_type == PosType.arke) {
       try {
-        debugPrint('[PosService] Initiating VAS Settlement Adjustment for $amount (Ref: $logNo)...');
+        debugPrint(
+            '[PosService] Initiating VAS Settlement Adjustment for $amount (Ref: $logNo)...');
         final request = VasRequestBody(
           amount: amount,
           originalVoucherNumber: logNo,
@@ -169,6 +171,7 @@ class PosService {
   Future<void> stopNfcPolling() async {
     if (_type == PosType.arke) {
       _arkeNfcPollingActive = false;
+      _arkeNfcPollingSession++;
     } else {
       await _cpay.stopNfcPolling();
     }
@@ -179,11 +182,14 @@ class PosService {
   void _startArkeNfcLoop() {
     if (_arkeNfcPollingActive) return;
     _arkeNfcPollingActive = true;
+    final session = ++_arkeNfcPollingSession;
 
     debugPrint('[PosService] 🔄 Starting Arke NFC loop...');
 
     Future.doWhile(() async {
-      if (!_arkeNfcPollingActive) return false;
+      if (!_arkeNfcPollingActive || session != _arkeNfcPollingSession) {
+        return false;
+      }
 
       try {
         // startNfcScan() blocks until card is tapped (with internal timeout)
@@ -192,7 +198,14 @@ class PosService {
               onTimeout: () => null,
             );
 
-        if (uid != null && uid.isNotEmpty && _arkeNfcPollingActive) {
+        if (session != _arkeNfcPollingSession || !_arkeNfcPollingActive) {
+          debugPrint(
+            '[PosService] Ignoring stale Arke NFC result from session=$session',
+          );
+          return false;
+        }
+
+        if (uid != null && uid.isNotEmpty) {
           _lastArkeCardId = uid;
           debugPrint('[PosService] 📱 Arke NFC card detected: $uid');
 
@@ -204,12 +217,19 @@ class PosService {
           await Future.delayed(const Duration(seconds: 2));
         }
       } catch (e) {
-        debugPrint('[PosService] Arke NFC scan error: $e');
+        if (session != _arkeNfcPollingSession || !_arkeNfcPollingActive) {
+          debugPrint(
+            '[PosService] Arke NFC scan finished after stop (session=$session)',
+          );
+          return false;
+        }
+
+        debugPrint('[PosService] Arke NFC scan error (session=$session): $e');
         // Small delay before retry on error
         await Future.delayed(const Duration(seconds: 1));
       }
 
-      return _arkeNfcPollingActive; // Continue loop if still active
+      return _arkeNfcPollingActive && session == _arkeNfcPollingSession;
     });
   }
 
@@ -280,6 +300,7 @@ class PosService {
 
   void dispose() {
     _arkeNfcPollingActive = false;
+    _arkeNfcPollingSession++;
     _cpayNfcSub?.cancel();
     if (!_nfcController.isClosed) {
       _nfcController.close();
