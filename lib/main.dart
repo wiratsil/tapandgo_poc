@@ -257,7 +257,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       // Set up VAS event listener
       _posService.onVasEvent?.listen((event) {
         debugPrint('[VAS] Event Type: ${event.type}, Data: ${event.data}');
-        
+
         // Reset the NFC scan cooldown so ghost scans are ignored right after returning to our app
         _lastScannedTime = DateTime.now();
 
@@ -277,24 +277,69 @@ class _WelcomeScreenState extends State<WelcomeScreen>
               data = Map<String, dynamic>.from(event.data as Map);
             }
 
-            final amountStr = data['amount']?.toString();
-            final code = data['code']?.toString() ?? data['responseCode']?.toString() ?? data['status']?.toString();
-            final msg = data['message']?.toString() ?? data['responseMessage']?.toString() ?? data['error']?.toString() ?? event.data.toString();
+            final code = data['code']?.toString() ??
+                data['responseCode']?.toString() ??
+                data['status']?.toString() ??
+                data['responseCodeThirtyNine']?.toString();
+            final msg = data['message']?.toString() ??
+                data['responseMessage']?.toString() ??
+                data['error']?.toString() ??
+                event.data.toString();
 
-            if (code == '1' || code == '0' || code == '00' || code == '200' || code == 'SUCCESS' || code == 'success') {
-               _showResultDialog('ชำระเงินสำเร็จ', 'ตัดเงินผ่านบัตรเรียบร้อยแล้ว', isSuccess: true, isTapOut: true, price: amountStr, topStatus: 'PAYMENT SUCCESS');
+            if (code == '1' ||
+                code == '0' ||
+                code == '00' ||
+                code == '200' ||
+                code == 'SUCCESS' ||
+                code == 'success') {
+              // Extract card info and log number for our custom flow
+              final String? cardNumber = data['cardNumber']?.toString() ?? 
+                  data['cardNo']?.toString();
+              final String? logNo = data['logNo']?.toString() ??
+                  data['voucherNumber']?.toString() ??
+                  data['referenceNumber']?.toString();
+
+              if (cardNumber != null && cardNumber.isNotEmpty) {
+                debugPrint(
+                    '[VAS] ✅ Sale 1 THB Success. Card: $cardNumber, LogNo: $logNo');
+
+                // Determine if this is Tap In or Tap Out based on cardNumber
+                // We use aid as a primary key, so we'll map cardNumber to aid
+                final nfcData = QrData(aid: cardNumber, bal: 100.00);
+
+                if (_pendingTransactions.containsKey(nfcData.aid)) {
+                  _handleTapOut(nfcData,
+                      isNfc: true, cardNumber: cardNumber, logNo: logNo);
+                } else {
+                  _handleTapIn(nfcData,
+                      isNfc: true, cardNumber: cardNumber, logNo: logNo);
+                }
+              } else {
+                // Should not happen for a successful sale
+                _showResultDialog('ชำระเงินสำเร็จ', 'ตัดเงินผ่านบัตรเรียบร้อยแล้ว',
+                    isSuccess: true,
+                    isTapOut: true,
+                    topStatus: 'PAYMENT SUCCESS');
+              }
             } else {
-               String cause = 'ระบบไม่สามารถดึงเงินจากบัตรได้';
-               if (code == '2') cause = 'แตะบัตรไม่สำเร็จ หรือดึงบัตรออกเร็วเกินไป';
-               else if (code == '-1' || code == 'USER_CANCEL') cause = 'ผู้ใช้ยกเลิกการทำรายการผ่านหน้าเครื่อง';
-               else if (code == '51') cause = 'ยอดเงินในบัตรไม่เพียงพอ';
-               else if (code == '54') cause = 'บัตรหมดอายุ หรือบัตรถูกระงับ';
+              String cause = 'ระบบไม่สามารถดึงเงินจากบัตรได้';
+              if (code == '2') {
+                cause = 'แตะบัตรไม่สำเร็จ หรือดึงบัตรออกเร็วเกินไป';
+              } else if (code == '-1' || code == 'USER_CANCEL') {
+                cause = 'ผู้ใช้ยกเลิกการทำรายการผ่านหน้าเครื่อง';
+              } else if (code == '51') {
+                cause = 'ยอดเงินในบัตรไม่เพียงพอ';
+              } else if (code == '54') {
+                cause = 'บัตรหมดอายุ หรือบัตรถูกระงับ';
+              }
 
-               _showResultDialog('ชำระเงินไม่สำเร็จ', 'Code: $code\nMessage: $msg', isSuccess: false, instruction: cause);
+              _showResultDialog('ชำระเงินไม่สำเร็จ', 'Code: $code\nMessage: $msg',
+                  isSuccess: false, instruction: cause);
             }
           } catch (e) {
             debugPrint('[VAS] Parse error: $e');
-            _showResultDialog('สถานะไม่ชัดเจน', 'Error: $e\n\nRaw Data:\n${event.data}', isSuccess: false);
+            _showResultDialog('สถานะไม่ชัดเจน', 'Error: $e\n\nRaw Data:\n${event.data}',
+                isSuccess: false);
           }
           if (mounted) {
             setState(() {
@@ -303,8 +348,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
             });
           }
         } else if (event.type == 'onError') {
-           _showResultDialog('ข้อผิดพลาด', 'ไม่สามารถทำรายการได้\n${event.data}', isSuccess: false);
-           if (mounted) {
+          _showResultDialog('ข้อผิดพลาด', 'ไม่สามารถทำรายการได้\n${event.data}',
+              isSuccess: false);
+          if (mounted) {
             setState(() {
               _isProcessing = false;
               _isLoading = false;
@@ -720,54 +766,20 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       });
     }
 
-    String cardId;
-    String rawData = '';
     try {
-      final result = await _posService.readCardId().timeout(
-        const Duration(milliseconds: 1500),
-        onTimeout: () => null,
-      );
-      if (result != null && result.cardId.isNotEmpty) {
-        cardId = result.cardId;
-        rawData = result.rawData;
-        debugPrint('[NFC] ✅ Card ID detected: $cardId');
-
-        // Prevent ghost scans / duplicate taps within 5 seconds
-        if (_lastScannedCardId == cardId && _lastScannedTime != null) {
-          final diff = DateTime.now().difference(_lastScannedTime!);
-          if (diff.inSeconds < 5) {
-            debugPrint('[NFC] 🚫 Ignoring duplicate tap within cooldown');
-            _isProcessing = false;
-            if (mounted) setState(() => _isLoading = false);
-            return;
-          }
-        }
-        _lastScannedCardId = cardId;
-        _lastScannedTime = DateTime.now();
-
-      } else {
-        cardId = 'UNKNOWN-CARD';
-        rawData = 'ไม่มีข้อมูล';
-        debugPrint('[NFC] ⚠️ readCardId returned null/empty');
-      }
+      debugPrint('[NFC] 💳 Starting 1 THB sale for card identification...');
+      await _posService.vasSale(1.0);
+      // Processing and Loading will be reset in onVasEvent
     } catch (e) {
-      debugPrint('[NFC] ❌ Read Card Failed: $e');
-      cardId = 'UNKNOWN-CARD';
-      rawData = 'Error: $e';
-    }
-
-    if (mounted) {
-      setState(() {
-        _lastScanLog = 'เวลา (NFC): ${_formatDateTime(DateTime.now().toUtc())} (UTC)\n\nข้อมูลดิบ (Raw EMV / UID):\n$rawData';
-      });
-    }
-
-    final nfcData = QrData(aid: cardId, bal: 100.00);
-
-    if (_pendingTransactions.containsKey(nfcData.aid)) {
-      await _handleTapOut(nfcData, isNfc: true);
-    } else {
-      await _handleTapIn(nfcData, isNfc: true);
+      debugPrint('[NFC] ❌ VAS Sale Trigger Failed: $e');
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+          _isLoading = false;
+        });
+      }
+      _showResultDialog('ข้อผิดพลาด', 'ไม่สามารถเรียกใช้งาน SDK ได้\n$e',
+          isSuccess: false);
     }
   }
 
@@ -850,7 +862,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   }
 
   // ============ Tap In / Tap Out Logic ============
-  Future<void> _handleTapIn(QrData qrData, {bool isNfc = false}) async {
+  Future<void> _handleTapIn(QrData qrData,
+      {bool isNfc = false, String? cardNumber, String? logNo}) async {
     // Get current location — check GPS source for NFC
     double lat;
     double lng;
@@ -901,6 +914,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       tapInTime: tapInTime,
       tapInLoc: TransactionLocation(lat: lat, lng: lng),
       routeId: routeId,
+      cardNumber: cardNumber,
+      logNo: logNo,
     );
 
     setState(() {
@@ -963,7 +978,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     );
   }
 
-  Future<void> _handleTapOut(QrData qrData, {bool isNfc = false}) async {
+  Future<void> _handleTapOut(QrData qrData,
+      {bool isNfc = false, String? cardNumber, String? logNo}) async {
     // Check internet connectivity before Tap Out (skip in offline mode)
     if (!_isOfflineMode) {
       final hasInternet = await _checkInternetConnection();
@@ -1021,7 +1037,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       transactions: [txnItem],
     );
 
-    await _submitTransaction(payload, qrData.aid, routeId: pending.routeId, isNfc: isNfc);
+    await _submitTransaction(payload, qrData.aid,
+        routeId: pending.routeId, isNfc: isNfc, logNo: logNo ?? pending.logNo);
   }
 
   /// Check if device has internet connection
@@ -1041,6 +1058,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     String aid, {
     int? routeId,
     bool isNfc = false,
+    String? logNo,
   }) async {
     final url = Uri.parse(
       'https://tng-platform-dev.atlasicloud.com/api/tng/tap/transactions',
@@ -1079,6 +1097,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
             payload: payload,
             routeId: routeId,
             tapOutTime: tapOutTime,
+            logNo: logNo,
           ),
         );
         debugPrint('[EMV] ========== TAP-OUT EMV FLOW ==========');
@@ -1144,9 +1163,12 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                 // --- ARKE EMV PAYMENT INTEGRATION (BYPASSED) ---
                 try {
                   if (isNfc && _posService.isArke) {
-                    debugPrint('[DEBUG] 💳 Triggering VAS Payment for $fare');
-                    await _posService.vasSale(fare.toDouble());
-                    return; // Wait for VAS event callback to handle _showResultDialog
+                    debugPrint(
+                        '[DEBUG] 💳 Skip traditional VAS Sale, using settlement adjustment flow');
+                    // In the new flow, we don't call vasSale(fare) here.
+                    // Instead, we wait for _submitEmvTransaction to call vasSettlementAdjustment.
+                    // But we still need to wait for GPS to resolve.
+                    return;
                   }
 
                   debugPrint(
@@ -1463,10 +1485,31 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       debugPrint('[EMV]   ├─ deviceId: ${emvRequest.deviceId}');
       debugPrint('[EMV]   └─ plateNo: ${emvRequest.plateNo}');
 
-      // Send
+      // Send to EMV API
       final success = await _emvTransactionService.submitEmvTransaction(
         emvRequest,
       );
+
+      // --- ARKE SETTLEMENT ADJUSTMENT ---
+      if (success && _posService.isArke && fareAmount > 0) {
+        // Find the logNo from the pending request
+        final pending = _pendingEmvRequests.firstWhere(
+          (e) => e.payload.transactions.first.txnId == firstTxn.txnId,
+          orElse: () => _PendingEmvRequest(
+              payload: originalPayload, tapOutTime: DateTime.now()),
+        );
+
+        if (pending.logNo != null) {
+          debugPrint(
+              '[EMV] 💰 Triggering VAS Settlement Adjustment: Amount=$fareAmount, LogNo=${pending.logNo}');
+          await _posService.vasSettlementAdjustment(
+              fareAmount, pending.logNo!);
+        } else {
+          debugPrint(
+              '[EMV] ⚠️ Cannot adjust settlement: logNo is null for txnId ${firstTxn.txnId}');
+        }
+      }
+
       debugPrint(
         '[EMV] ========== EMV RESULT: ${success ? "✅ SUCCESS" : "❌ FAILED"} ==========',
       );
@@ -2334,11 +2377,13 @@ class _PendingEmvRequest {
   final TransactionRequest payload;
   final int? routeId;
   final DateTime tapOutTime;
+  final String? logNo;
 
   _PendingEmvRequest({
     required this.payload,
     this.routeId,
     required this.tapOutTime,
+    this.logNo,
   });
 }
 

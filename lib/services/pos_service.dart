@@ -57,12 +57,13 @@ class PosService {
       // but getTerminalInfo() requires actual Arke USDK binding and will throw
       // SDK_NOT_CONNECTED on non-Arke devices.
       final info = await _arke.getTerminalInfo().timeout(
-        const Duration(seconds: 3),
-        onTimeout: () => null,
-      );
+            const Duration(seconds: 3),
+            onTimeout: () => null,
+          );
       if (info != null && info.isNotEmpty) {
         _type = PosType.arke;
-        debugPrint('[PosService] 📟 Detected: ARKE (USDK) - ${info['model'] ?? 'unknown'}');
+        debugPrint(
+            '[PosService] 📟 Detected: ARKE (USDK) - ${info['model'] ?? 'unknown'}');
         return;
       }
     } catch (e) {
@@ -114,8 +115,28 @@ class PosService {
     }
   }
 
+  /// Initiate a VAS settlement adjustment transaction
+  Future<void> vasSettlementAdjustment(double amount, String logNo) async {
+    if (_type == PosType.arke) {
+      try {
+        debugPrint('[PosService] Initiating VAS Settlement Adjustment for $amount (Ref: $logNo)...');
+        final request = VasRequestBody(
+          amount: amount,
+          originalVoucherNumber: logNo,
+          originalReferenceNumber: logNo,
+        );
+        await _arke.vas.settlementAdjustment(request);
+      } catch (e) {
+        debugPrint('[PosService] VAS settlement adjustment error: $e');
+      }
+    } else {
+      debugPrint('[PosService] VAS is only supported on Arke devices.');
+    }
+  }
+
   /// Stream of VAS events (onStart, onNext, onComplete, onError)
-  Stream<VasEvent>? get onVasEvent => _type == PosType.arke ? _arke.vas.vasEvents : null;
+  Stream<VasEvent>? get onVasEvent =>
+      _type == PosType.arke ? _arke.vas.vasEvents : null;
 
   // ==================== Beep ====================
 
@@ -167,9 +188,9 @@ class PosService {
       try {
         // startNfcScan() blocks until card is tapped (with internal timeout)
         final uid = await _arke.startNfcScan().timeout(
-          const Duration(seconds: 10),
-          onTimeout: () => null,
-        );
+              const Duration(seconds: 10),
+              onTimeout: () => null,
+            );
 
         if (uid != null && uid.isNotEmpty && _arkeNfcPollingActive) {
           _lastArkeCardId = uid;

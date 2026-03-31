@@ -14,7 +14,7 @@ packages:
     description:
       path: "."
       ref: HEAD
-      resolved-ref: bcaf43e67ff0f0926d57025825d0333b62fd02bb
+      resolved-ref: e45ab7339fcd91340825a0392b2db5f89bf6df9c
       url: "https://github.com/wiratsil/arke_sdk_flutter.git"
     source: git
     version: "0.0.1"
