@@ -76,9 +76,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   static const String _qrScannerModeKey = 'show_qr_scanner';
 
   final _posService = PosService();
-  final MobileScannerController _qrScannerController = MobileScannerController(
-    facing: CameraFacing.front,
-  );
+  late MobileScannerController _qrScannerController;
   // final _cpaySdkPlugin = CpaySdkPlugin(); // Refactored into PosService
 
   // Prevent auto sync from running again when returning to this screen
@@ -103,6 +101,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   StreamSubscription<bool>? _nfcSubscription;
   String _qrCodePayload = ''; // Payload for the generated QR Code
   bool _showQrScanner = false;
+  bool _showSimulateButtons = false;
   bool _isQrScanDialogOpen = false;
   String? _lastQrScanValue;
   DateTime? _lastQrScanTime;
@@ -132,6 +131,10 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   final Map<String, GpsData> _resolvedTapInGps = {};
 
   /// หา GPS record ที่ใกล้เคียง targetTime ที่สุดจาก history
+  MobileScannerController _createQrScannerController() {
+    return MobileScannerController(facing: CameraFacing.front);
+  }
+
   GpsData? _findClosestGps(DateTime targetTime) {
     if (_gpsHistory.isEmpty) return null;
 
@@ -259,6 +262,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   @override
   void initState() {
     super.initState();
+    _qrScannerController = _createQrScannerController();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _loadPlateNumber();
@@ -707,6 +711,20 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     debugPrint(
       '[QR] Display mode changed to: ${value ? "Scanner" : "QR Code"}',
     );
+  }
+
+  void _resetQrScanner() {
+    if (!mounted) return;
+
+    setState(() {
+      _qrScannerController.dispose();
+      _qrScannerController = _createQrScannerController();
+      _isQrScanDialogOpen = false;
+      _lastQrScanValue = null;
+      _lastQrScanTime = null;
+    });
+
+    debugPrint('[QR] Scanner controller reset');
   }
 
   @override
@@ -1708,8 +1726,23 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       final encodedPayload = scannedUri?.queryParameters['payload'];
       if (encodedPayload != null && encodedPayload.isNotEmpty) {
         payloadMap = jsonDecode(encodedPayload) as Map<String, dynamic>;
+      } else if (scannedUri != null &&
+          scannedUri.hasQuery &&
+          scannedUri.queryParameters.containsKey('aid')) {
+        payloadMap = {
+          'aid': scannedUri.queryParameters['aid'],
+          'bal': double.tryParse(scannedUri.queryParameters['bal'] ?? '') ?? 0.0,
+          'exp': scannedUri.queryParameters['exp'],
+        };
       } else {
         payloadMap = jsonDecode(rawValue) as Map<String, dynamic>;
+      }
+
+      final nestedPayload = payloadMap['payload'];
+      if (nestedPayload is Map<String, dynamic>) {
+        payloadMap = nestedPayload;
+      } else if (nestedPayload is String && nestedPayload.isNotEmpty) {
+        payloadMap = jsonDecode(nestedPayload) as Map<String, dynamic>;
       }
 
       if (payloadMap.containsKey('aid') && payloadMap.containsKey('bal')) {
@@ -1727,6 +1760,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
     final rawValue = capture.barcodes.first.rawValue;
     if (rawValue == null || rawValue.isEmpty) return;
+    debugPrint('[QR] Raw scan value: $rawValue');
 
     final now = DateTime.now();
     if (_lastQrScanValue == rawValue &&
@@ -1749,6 +1783,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     try {
       final qrData = _parseQrDataFromScan(rawValue);
       if (qrData == null) {
+        debugPrint('[QR] Parsed scan payload is not QrData(aid, bal, exp)');
         _showResultDialog(
           'QR Code ไม่ถูกต้อง',
           'ไม่สามารถอ่านข้อมูลบัตรจาก QR Code นี้ได้',
@@ -1763,8 +1798,10 @@ class _WelcomeScreenState extends State<WelcomeScreen>
           : qrData;
 
       if (pendingKey != null) {
+        debugPrint('[QR] Routing scan to TAP-OUT flow | aid=${effectiveQrData.aid}');
         await _handleTapOut(effectiveQrData);
       } else {
+        debugPrint('[QR] Routing scan to TAP-IN flow | aid=${effectiveQrData.aid}');
         await _handleTapIn(effectiveQrData);
       }
     } finally {
@@ -2085,7 +2122,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                               ),
 
                               // === Debug Simulate Buttons ===
-                              if (false) ...[
+                              if (_showSimulateButtons) ...[
                               const SizedBox(height: 20),
                               Row(
                                 mainAxisAlignment: MainAxisAlignment.center,
@@ -2204,6 +2241,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                               showQrScanner: _showQrScanner,
                                               onShowQrScannerChanged:
                                                   _setShowQrScanner,
+                                              onResetQrScanner: _resetQrScanner,
                                             ),
                                           ),
                                         );
@@ -2348,6 +2386,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                               onUseDeviceGpsChanged: _setUseDeviceGps,
                               showQrScanner: _showQrScanner,
                               onShowQrScannerChanged: _setShowQrScanner,
+                              onResetQrScanner: _resetQrScanner,
                             ),
                           ),
                         );
@@ -2580,6 +2619,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                         onUseDeviceGpsChanged: _setUseDeviceGps,
                         showQrScanner: _showQrScanner,
                         onShowQrScannerChanged: _setShowQrScanner,
+                        onResetQrScanner: _resetQrScanner,
                       ),
                     ),
                   );

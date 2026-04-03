@@ -30,6 +30,7 @@ class SettingsScreen extends StatefulWidget {
   final ValueChanged<bool> onUseDeviceGpsChanged;
   final bool showQrScanner;
   final ValueChanged<bool> onShowQrScannerChanged;
+  final VoidCallback onResetQrScanner;
 
   const SettingsScreen({
     super.key,
@@ -47,6 +48,7 @@ class SettingsScreen extends StatefulWidget {
     required this.onUseDeviceGpsChanged,
     this.showQrScanner = false,
     required this.onShowQrScannerChanged,
+    required this.onResetQrScanner,
   });
 
   @override
@@ -866,6 +868,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ],
             ),
+
+            if (_localShowQrScanner) ...[
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    widget.onResetQrScanner();
+                    _showSnackBar('รีเซ็ตกล้องสแกน QR แล้ว');
+                  },
+                  icon: const Icon(Icons.cameraswitch, size: 18),
+                  label: const Text(
+                    'รีเซ็ตกล้องสแกน QR',
+                    style: TextStyle(fontSize: 14),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.orange,
+                    side: const BorderSide(color: Colors.orange),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                ),
+              ),
+            ],
 
             const Divider(height: 16),
 
