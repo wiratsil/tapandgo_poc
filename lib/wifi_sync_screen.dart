@@ -28,6 +28,8 @@ class SettingsScreen extends StatefulWidget {
   final VoidCallback? onClearCache;
   final bool useDeviceGps;
   final ValueChanged<bool> onUseDeviceGpsChanged;
+  final bool showQrScanner;
+  final ValueChanged<bool> onShowQrScannerChanged;
 
   const SettingsScreen({
     super.key,
@@ -43,6 +45,8 @@ class SettingsScreen extends StatefulWidget {
     this.onClearCache,
     this.useDeviceGps = false,
     required this.onUseDeviceGpsChanged,
+    this.showQrScanner = false,
+    required this.onShowQrScannerChanged,
   });
 
   @override
@@ -79,6 +83,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late String _currentPlateNumber;
   late bool _localOfflineMode;
   late bool _localUseDeviceGps;
+  late bool _localShowQrScanner;
 
   // GPS History
   late List<GpsData> _localGpsHistory;
@@ -103,6 +108,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _currentPlateNumber = widget.plateNumber;
     _localOfflineMode = widget.isOfflineMode;
     _localUseDeviceGps = widget.useDeviceGps;
+    _localShowQrScanner = widget.showQrScanner;
     _localGpsHistory = List<GpsData>.from(widget.gpsHistory);
     _loadSavedHostIp();
     _getLocalIp();
@@ -857,6 +863,61 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     widget.onUseDeviceGpsChanged(value);
                   },
                   activeColor: Colors.teal,
+                ),
+              ],
+            ),
+
+            const Divider(height: 16),
+
+            // Main screen QR display mode toggle
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.qr_code_scanner,
+                    color: Colors.orange,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'โหมดแสดงผล QR หน้าหลัก',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _localShowQrScanner
+                            ? 'แสดงกล้องสแกน QR'
+                            : 'แสดง QR Code',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Switch(
+                  value: _localShowQrScanner,
+                  onChanged: (value) {
+                    setState(() {
+                      _localShowQrScanner = value;
+                    });
+                    widget.onShowQrScannerChanged(value);
+                  },
+                  activeColor: Colors.orange,
                 ),
               ],
             ),
@@ -2018,6 +2079,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return null;
     }
 
+    final scannerController = MobileScannerController(
+      facing: CameraFacing.front,
+    );
+
     return showDialog<String>(
       context: context,
       builder: (context) {
@@ -2038,6 +2103,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(16),
                     child: MobileScanner(
+                      controller: scannerController,
                       onDetect: (capture) {
                         final barcodes = capture.barcodes;
                         if (barcodes.isNotEmpty) {
@@ -2060,7 +2126,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         );
       },
-    );
+    ).whenComplete(scannerController.dispose);
   }
 
   // ============ Section 3: เกี่ยวกับแอป ============

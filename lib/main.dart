@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import 'models/transaction_model.dart';
 import 'success_result_screen.dart';
 import 'services/pos_service.dart';
@@ -72,8 +73,12 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     with WidgetsBindingObserver {
   static const String _qrLandingPageUrl =
       'https://08hh39x2-5234.asse.devtunnels.ms/qrcode.html';
+  static const String _qrScannerModeKey = 'show_qr_scanner';
 
   final _posService = PosService();
+  final MobileScannerController _qrScannerController = MobileScannerController(
+    facing: CameraFacing.front,
+  );
   // final _cpaySdkPlugin = CpaySdkPlugin(); // Refactored into PosService
 
   // Prevent auto sync from running again when returning to this screen
@@ -97,6 +102,10 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
   StreamSubscription<bool>? _nfcSubscription;
   String _qrCodePayload = ''; // Payload for the generated QR Code
+  bool _showQrScanner = false;
+  bool _isQrScanDialogOpen = false;
+  String? _lastQrScanValue;
+  DateTime? _lastQrScanTime;
 
   // WiFi Sync for pending transactions
   final WifiSyncService _syncService = WifiSyncService();
@@ -691,6 +700,15 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         '[GPS] 🔧 GPS source changed to: ${value ? "Device GPS" : "MQTT GPS"}');
   }
 
+  void _setShowQrScanner(bool value) async {
+    setState(() => _showQrScanner = value);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_qrScannerModeKey, value);
+    debugPrint(
+      '[QR] Display mode changed to: ${value ? "Scanner" : "QR Code"}',
+    );
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -699,6 +717,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     _gpsSubscription?.cancel();
     _mqttService.disconnect();
     _stopBackgroundScanning();
+    _qrScannerController.dispose();
     _posService.dispose();
     super.dispose();
   }
@@ -815,11 +834,13 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       final savedPlate = prefs.getString('plate_number');
       final savedOffline = prefs.getBool('offline_mode') ?? false;
       final savedUseDeviceGps = prefs.getBool('use_device_gps') ?? false;
+      final savedShowQrScanner = prefs.getBool(_qrScannerModeKey) ?? false;
       if (mounted) {
         setState(() {
           if (savedPlate != null) _plateNumber = savedPlate;
           _isOfflineMode = savedOffline;
           _useDeviceGps = savedUseDeviceGps;
+          _showQrScanner = savedShowQrScanner;
         });
       }
 
@@ -1679,6 +1700,133 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     }
   }
 
+  QrData? _parseQrDataFromScan(String rawValue) {
+    try {
+      Map<String, dynamic>? payloadMap;
+
+      final scannedUri = Uri.tryParse(rawValue);
+      final encodedPayload = scannedUri?.queryParameters['payload'];
+      if (encodedPayload != null && encodedPayload.isNotEmpty) {
+        payloadMap = jsonDecode(encodedPayload) as Map<String, dynamic>;
+      } else {
+        payloadMap = jsonDecode(rawValue) as Map<String, dynamic>;
+      }
+
+      if (payloadMap.containsKey('aid') && payloadMap.containsKey('bal')) {
+        return QrData.fromJson(payloadMap);
+      }
+    } catch (e) {
+      debugPrint('[QR] Failed to decode scanned payload: $e');
+    }
+    return null;
+  }
+
+  Future<void> _handleQrCodeDetected(BarcodeCapture capture) async {
+    if (_isQrScanDialogOpen || _isProcessing || _isLoading) return;
+    if (capture.barcodes.isEmpty) return;
+
+    final rawValue = capture.barcodes.first.rawValue;
+    if (rawValue == null || rawValue.isEmpty) return;
+
+    final now = DateTime.now();
+    if (_lastQrScanValue == rawValue &&
+        _lastQrScanTime != null &&
+        now.difference(_lastQrScanTime!) < const Duration(seconds: 2)) {
+      return;
+    }
+
+    _lastQrScanValue = rawValue;
+    _lastQrScanTime = now;
+    _isQrScanDialogOpen = true;
+    _isProcessing = true;
+
+    if (!mounted) {
+      _isQrScanDialogOpen = false;
+      _isProcessing = false;
+      return;
+    }
+
+    try {
+      final qrData = _parseQrDataFromScan(rawValue);
+      if (qrData == null) {
+        _showResultDialog(
+          'QR Code ไม่ถูกต้อง',
+          'ไม่สามารถอ่านข้อมูลบัตรจาก QR Code นี้ได้',
+          isSuccess: false,
+        );
+        return;
+      }
+
+      final pendingKey = _findPendingTransactionKey(qrData.aid);
+      final effectiveQrData = pendingKey != null && pendingKey != qrData.aid
+          ? QrData(aid: pendingKey, bal: qrData.bal, exp: qrData.exp)
+          : qrData;
+
+      if (pendingKey != null) {
+        await _handleTapOut(effectiveQrData);
+      } else {
+        await _handleTapIn(effectiveQrData);
+      }
+    } finally {
+      _isQrScanDialogOpen = false;
+    }
+  }
+
+  Widget _buildQrDisplayPanel() {
+    if (_showQrScanner) {
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          MobileScanner(
+            controller: _qrScannerController,
+            onDetect: _handleQrCodeDetected,
+          ),
+          Container(
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.greenAccent, width: 2),
+              borderRadius: BorderRadius.circular(16),
+            ),
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 8,
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.6),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Text(
+                'สแกน QR Code',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Container(
+      color: Colors.white,
+      child: _qrCodePayload.isNotEmpty
+          ? QrImageView(
+              data: _qrCodePayload,
+              version: QrVersions.auto,
+              padding: const EdgeInsets.all(12),
+            )
+          : const Center(
+              child: CircularProgressIndicator(),
+            ),
+    );
+  }
+
   // ============ UI Build ============
   @override
   Widget build(BuildContext context) {
@@ -1896,22 +2044,21 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                 ),
                                 child: ClipRRect(
                                   borderRadius: BorderRadius.circular(16),
-                                  child: Container(
-                                    color: Colors.white,
-                                    child: _qrCodePayload.isNotEmpty
-                                        ? QrImageView(
-                                            data: _qrCodePayload,
-                                            version: QrVersions.auto,
-                                            padding: const EdgeInsets.all(12),
-                                          )
-                                        : const Center(
-                                            child: CircularProgressIndicator(),
-                                          ),
-                                  ),
+                                  child: _buildQrDisplayPanel(),
                                 ),
                               ),
                               const SizedBox(height: 24),
-                              const Text(
+                              if (_showQrScanner)
+                                const Text(
+                                  'กรุณาสแกน QR Code',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 32,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                )
+                              else
+                              Text(
                                 'กรุณาแตะบัตร',
                                 style: TextStyle(
                                   color: Colors.white,
@@ -1920,7 +2067,16 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                 ),
                               ),
                               const SizedBox(height: 16),
-                              const Text(
+                              if (_showQrScanner)
+                                const Text(
+                                  'สแกน QR ในกรอบด้านบนเพื่ออ่าน payload',
+                                  style: TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 18,
+                                  ),
+                                )
+                              else
+                              Text(
                                 'แตะบัตรที่จุดอ่านเพื่อชำระเงิน',
                                 style: TextStyle(
                                   color: Colors.white70,
@@ -1929,6 +2085,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                               ),
 
                               // === Debug Simulate Buttons ===
+                              if (false) ...[
                               const SizedBox(height: 20),
                               Row(
                                 mainAxisAlignment: MainAxisAlignment.center,
@@ -1975,6 +2132,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                   ),
                                 ],
                               ),
+                              ],
 
                               const Spacer(),
 
@@ -2043,6 +2201,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                               useDeviceGps: _useDeviceGps,
                                               onUseDeviceGpsChanged:
                                                   _setUseDeviceGps,
+                                              showQrScanner: _showQrScanner,
+                                              onShowQrScannerChanged:
+                                                  _setShowQrScanner,
                                             ),
                                           ),
                                         );
@@ -2185,6 +2346,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                               onOfflineModeChanged: _setOfflineMode,
                               useDeviceGps: _useDeviceGps,
                               onUseDeviceGpsChanged: _setUseDeviceGps,
+                              showQrScanner: _showQrScanner,
+                              onShowQrScannerChanged: _setShowQrScanner,
                             ),
                           ),
                         );
@@ -2415,6 +2578,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                         onClearCache: _handleClearCache,
                         useDeviceGps: _useDeviceGps,
                         onUseDeviceGpsChanged: _setUseDeviceGps,
+                        showQrScanner: _showQrScanner,
+                        onShowQrScannerChanged: _setShowQrScanner,
                       ),
                     ),
                   );
