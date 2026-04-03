@@ -70,6 +70,9 @@ class WelcomeScreen extends StatefulWidget {
 
 class _WelcomeScreenState extends State<WelcomeScreen>
     with WidgetsBindingObserver {
+  static const String _qrLandingPageUrl =
+      'https://08hh39x2-5234.asse.devtunnels.ms/qrcode.html';
+
   final _posService = PosService();
   // final _cpaySdkPlugin = CpaySdkPlugin(); // Refactored into PosService
 
@@ -163,6 +166,16 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     return dt.toUtc().toIso8601String();
   }
 
+  String _buildQrCodePayloadUrl(Map<String, dynamic> payload) {
+    final landingPageUri = Uri.parse(_qrLandingPageUrl);
+    return landingPageUri
+        .replace(queryParameters: {
+          ...landingPageUri.queryParameters,
+          'payload': jsonEncode(payload),
+        })
+        .toString();
+  }
+
   String _plateNumber = '';
   String _timeString = '00:00';
   String _currentStation = 'กำลังค้นหาสถานี...';
@@ -180,6 +193,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   bool _isAppDisabled = false;
   bool _isOfflineMode = false;
   String _lastScanLog = '';
+  String _latestLogNo = '';
   Timer? _timer;
 
   Widget _buildLoadingUI() {
@@ -298,6 +312,12 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                   data['voucherNumber']?.toString() ??
                   data['referenceNumber']?.toString();
 
+              if (logNo != null && logNo.isNotEmpty && mounted) {
+                setState(() {
+                  _latestLogNo = logNo;
+                });
+              }
+
               if (cardNumber != null && cardNumber.isNotEmpty) {
                 final pendingKey = _findPendingTransactionKey(cardNumber);
                 debugPrint(
@@ -396,7 +416,11 @@ class _WelcomeScreenState extends State<WelcomeScreen>
               debugPrint(
                 '[EMV] ✅ GPS time passed tapOutTime! Firing EMV transaction...',
               );
-              _submitEmvTransaction(pending.payload, routeId: pending.routeId);
+              _submitEmvTransaction(
+                pending.payload,
+                routeId: pending.routeId,
+                logNo: pending.logNo,
+              );
               toRemove.add(pending);
             }
           }
@@ -480,7 +504,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                 "busStopName": nearestStop.busstopDesc,
                 "licensePlate": _plateNumber,
               };
-              newQrPayload = jsonEncode(qrPayloadMap);
+              newQrPayload = _buildQrCodePayloadUrl(qrPayloadMap);
             }
 
             if (mounted) {
@@ -1288,6 +1312,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   Future<void> _submitEmvTransaction(
     TransactionRequest originalPayload, {
     int? routeId,
+    String? logNo,
   }) async {
     try {
       final firstTxn = originalPayload.transactions.first;
@@ -1546,17 +1571,10 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
       // --- ARKE SETTLEMENT ADJUSTMENT ---
       if (success && _posService.isArke && fareAmount > 0) {
-        // Find the logNo from the pending request
-        final pending = _pendingEmvRequests.firstWhere(
-          (e) => e.payload.transactions.first.txnId == firstTxn.txnId,
-          orElse: () => _PendingEmvRequest(
-              payload: originalPayload, tapOutTime: DateTime.now()),
-        );
-
-        if (pending.logNo != null) {
+        if (logNo != null && logNo.isNotEmpty) {
           debugPrint(
-              '[EMV] 💰 Triggering VAS Settlement Adjustment: Amount=$fareAmount, LogNo=${pending.logNo}');
-          await _posService.vasSettlementAdjustment(fareAmount, pending.logNo!);
+              '[EMV] 💰 Triggering VAS Settlement Adjustment: Amount=$fareAmount, LogNo=$logNo');
+          await _posService.vasSettlementAdjustment(fareAmount, logNo);
         } else {
           debugPrint(
               '[EMV] ⚠️ Cannot adjust settlement: logNo is null for txnId ${firstTxn.txnId}');
@@ -2020,6 +2038,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                               onOfflineModeChanged:
                                                   _setOfflineMode,
                                               lastScanLog: _lastScanLog,
+                                              latestLogNo: _latestLogNo,
                                               onClearCache: _handleClearCache,
                                               useDeviceGps: _useDeviceGps,
                                               onUseDeviceGpsChanged:
@@ -2392,6 +2411,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                         isOfflineMode: _isOfflineMode,
                         onOfflineModeChanged: _setOfflineMode,
                         lastScanLog: _lastScanLog,
+                        latestLogNo: _latestLogNo,
                         onClearCache: _handleClearCache,
                         useDeviceGps: _useDeviceGps,
                         onUseDeviceGpsChanged: _setUseDeviceGps,

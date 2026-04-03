@@ -136,6 +136,20 @@ class PosService {
     }
   }
 
+  /// Initiate a VAS settle transaction
+  Future<void> vasSettle() async {
+    if (_type == PosType.arke) {
+      try {
+        debugPrint('[PosService] Initiating VAS Settle...');
+        await _arke.vas.settle();
+      } catch (e) {
+        debugPrint('[PosService] VAS settle error: $e');
+      }
+    } else {
+      debugPrint('[PosService] VAS is only supported on Arke devices.');
+    }
+  }
+
   /// Stream of VAS events (onStart, onNext, onComplete, onError)
   Stream<VasEvent>? get onVasEvent =>
       _type == PosType.arke ? _arke.vas.vasEvents : null;

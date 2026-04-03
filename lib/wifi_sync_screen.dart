@@ -24,6 +24,7 @@ class SettingsScreen extends StatefulWidget {
   final bool isOfflineMode;
   final ValueChanged<bool> onOfflineModeChanged;
   final String lastScanLog;
+  final String latestLogNo;
   final VoidCallback? onClearCache;
   final bool useDeviceGps;
   final ValueChanged<bool> onUseDeviceGpsChanged;
@@ -38,6 +39,7 @@ class SettingsScreen extends StatefulWidget {
     this.isOfflineMode = false,
     required this.onOfflineModeChanged,
     this.lastScanLog = '',
+    this.latestLogNo = '',
     this.onClearCache,
     this.useDeviceGps = false,
     required this.onUseDeviceGpsChanged,
@@ -487,8 +489,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _showSettlementDialog() async {
-    final amountController = TextEditingController(text: '1.00');
-    final logNoController = TextEditingController();
     bool isSubmitting = false;
 
     await showDialog(
@@ -496,35 +496,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (dialogContext) => StatefulBuilder(
         builder: (dialogContext, setDialogState) => AlertDialog(
           title: const Text('Settlement จาก POS'),
-          content: SingleChildScrollView(
+          content: const SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text(
-                  'เรียก Settlement Adjustment ผ่าน SDK ของ POS โดยต้องระบุจำนวนเงินและเลขอ้างอิง (Log No)',
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: amountController,
-                  enabled: !isSubmitting,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  decoration: const InputDecoration(
-                    labelText: 'Amount',
-                    hintText: '1.00',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: logNoController,
-                  enabled: !isSubmitting,
-                  decoration: const InputDecoration(
-                    labelText: 'Log No',
-                    hintText: 'กรอกเลขอ้างอิงรายการเดิม',
-                    border: OutlineInputBorder(),
-                  ),
+                Text('เรียกคำสั่ง settle โดยตรงผ่าน POS SDK'),
+                SizedBox(height: 16),
+                Text(
+                  'ระบบจะส่งคำสั่ง arke.vas.settle() ไปยังเครื่อง POS ทันที',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 13, color: Colors.black54),
                 ),
               ],
             ),
@@ -539,45 +520,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
               onPressed: isSubmitting
                   ? null
                   : () async {
-                      final amount = double.tryParse(amountController.text);
-                      final logNo = logNoController.text.trim();
                       final messenger = ScaffoldMessenger.of(context);
                       final navigator = Navigator.of(dialogContext);
-
-                      if (amount == null || amount <= 0) {
-                        messenger.showSnackBar(
-                          const SnackBar(
-                            content: Text('กรุณากรอกจำนวนเงินให้ถูกต้อง'),
-                            duration: Duration(seconds: 2),
-                          ),
-                        );
-                        return;
-                      }
-                      if (logNo.isEmpty) {
-                        messenger.showSnackBar(
-                          const SnackBar(
-                            content: Text('กรุณากรอก Log No'),
-                            duration: Duration(seconds: 2),
-                          ),
-                        );
-                        return;
-                      }
 
                       setDialogState(() {
                         isSubmitting = true;
                       });
 
                       try {
-                        await _posService.vasSettlementAdjustment(
-                          amount,
-                          logNo,
-                        );
+                        await _posService.vasSettle();
                         if (!mounted) return;
                         navigator.pop();
                         messenger.showSnackBar(
                           const SnackBar(
-                            content:
-                                Text('ส่งคำสั่ง settlement ไปที่ POS แล้ว'),
+                            content: Text('ส่งคำสั่ง settle ไปที่ POS แล้ว'),
                             duration: Duration(seconds: 2),
                           ),
                         );
@@ -603,7 +559,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       height: 16,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
-                  : const Text('เรียก Settlement'),
+                  : const Text('เรียก Settle'),
             ),
           ],
         ),
