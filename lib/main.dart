@@ -24,6 +24,7 @@ import 'services/data_sync_service.dart';
 import 'services/database_helper.dart';
 import 'services/emv_transaction_service.dart';
 import 'models/emv_transaction_model.dart';
+import 'services/app_audio_service.dart';
 import 'package:sqflite/sqflite.dart';
 
 import 'package:qr_flutter/qr_flutter.dart';
@@ -82,6 +83,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   // Prevent auto sync from running again when returning to this screen
   static bool _hasAutoSynced = false;
 
+  static const List<AppSound> _welcomeSoundSequence = [AppSound.welcome];
+
   // EMV Payment Channel
   static const MethodChannel _emvPaymentChannel = MethodChannel(
     'com.example.tapandgo_poc/emv_payment',
@@ -135,6 +138,39 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     return MobileScannerController(facing: CameraFacing.front);
   }
 
+  List<AppSound> _tapInSuccessSounds({required bool isNfc}) {
+    return isNfc
+        ? const [AppSound.tapCard, AppSound.successful]
+        : const [AppSound.scanQr, AppSound.successful];
+  }
+
+  List<AppSound> _tapOutSuccessSounds({required bool isNfc}) {
+    return isNfc
+        ? const [AppSound.tapCard, AppSound.payment, AppSound.successful]
+        : const [AppSound.scanQr, AppSound.payment, AppSound.successful];
+  }
+
+  List<AppSound> _failureSounds({
+    required bool isNfc,
+    bool includeSourceCue = true,
+  }) {
+    if (!includeSourceCue) {
+      return const [AppSound.unsuccessful, AppSound.tryAgain];
+    }
+
+    return isNfc
+        ? const [
+            AppSound.tapCard,
+            AppSound.unsuccessful,
+            AppSound.tryAgain,
+          ]
+        : const [
+            AppSound.scanQr,
+            AppSound.unsuccessful,
+            AppSound.tryAgain,
+          ];
+  }
+
   GpsData? _findClosestGps(DateTime targetTime) {
     if (_gpsHistory.isEmpty) return null;
 
@@ -180,12 +216,10 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
   String _buildQrCodePayloadUrl(Map<String, dynamic> payload) {
     final landingPageUri = Uri.parse(_qrLandingPageUrl);
-    return landingPageUri
-        .replace(queryParameters: {
-          ...landingPageUri.queryParameters,
-          'payload': jsonEncode(payload),
-        })
-        .toString();
+    return landingPageUri.replace(queryParameters: {
+      ...landingPageUri.queryParameters,
+      'payload': jsonEncode(payload),
+    }).toString();
   }
 
   String _plateNumber = '';
@@ -360,7 +394,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                     'ชำระเงินสำเร็จ', 'ตัดเงินผ่านบัตรเรียบร้อยแล้ว',
                     isSuccess: true,
                     isTapOut: true,
-                    topStatus: 'PAYMENT SUCCESS');
+                    topStatus: 'PAYMENT SUCCESS',
+                    soundSequence: _tapOutSuccessSounds(isNfc: true));
               }
             } else {
               String cause = 'ระบบไม่สามารถดึงเงินจากบัตรได้';
@@ -376,17 +411,19 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
               _showResultDialog(
                   'ชำระเงินไม่สำเร็จ', 'Code: $code\nMessage: $msg',
-                  isSuccess: false, instruction: cause);
+                  isSuccess: false,
+                  instruction: cause,
+                  soundSequence: _failureSounds(isNfc: true));
             }
           } catch (e) {
             debugPrint('[VAS] Parse error: $e');
             _showResultDialog(
                 'สถานะไม่ชัดเจน', 'Error: $e\n\nRaw Data:\n${event.data}',
-                isSuccess: false);
+                isSuccess: false, soundSequence: _failureSounds(isNfc: true));
           }
         } else if (event.type == 'onError') {
           _showResultDialog('ข้อผิดพลาด', 'ไม่สามารถทำรายการได้\n${event.data}',
-              isSuccess: false);
+              isSuccess: false, soundSequence: _failureSounds(isNfc: true));
         }
       });
 
@@ -395,6 +432,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       _setupPendingSyncListener();
       _updateTime();
       _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
+      await AppAudioService.instance.init();
 
       // Set up MQTT GPS listener
       _gpsSubscription = _mqttService.gpsStream.listen((gpsData) async {
@@ -505,14 +543,14 @@ class _WelcomeScreenState extends State<WelcomeScreen>
               final activeBusTrip = await _dbHelper.getActiveBusTrip();
               final routeId = await _dbHelper.getFirstRouteId();
               final qrPayloadMap = {
-                "busTripInfoId": activeBusTrip?.businfoId ?? 0,
-                "busLineId": activeBusTrip?.buslineId ?? 0,
+                "busTripId": activeBusTrip?.id ?? 0,
+                "buslineId": activeBusTrip?.buslineId ?? 0,
                 "routeId": activeBusTrip?.routeId ?? routeId ?? 0,
-                "gpsTime": gpsData.rec != null
+                "gpsTimeStamp": gpsData.rec != null
                     ? gpsData.rec!.toUtc().toIso8601String()
                     : DateTime.now().toUtc().toIso8601String(),
-                "gpsLatitude": gpsData.lat,
-                "gpsLongitude": gpsData.lng,
+                "latitudeGPS": gpsData.lat,
+                "longitudeGPS": gpsData.lng,
                 "busStopId": nearestStop.busstopId,
                 "busStopName": nearestStop.busstopDesc,
                 "licensePlate": _plateNumber,
@@ -582,6 +620,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         _hasAutoSynced = true;
         await _syncData();
       }
+
+      unawaited(AppAudioService.instance.playSequence(_welcomeSoundSequence));
     });
   }
 
@@ -737,6 +777,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     _stopBackgroundScanning();
     _qrScannerController.dispose();
     _posService.dispose();
+    unawaited(AppAudioService.instance.dispose());
     super.dispose();
   }
 
@@ -841,7 +882,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         });
       }
       _showResultDialog('ข้อผิดพลาด', 'ไม่สามารถเรียกใช้งาน SDK ได้\n$e',
-          isSuccess: false);
+          isSuccess: false, soundSequence: _failureSounds(isNfc: true));
     }
   }
 
@@ -1068,6 +1109,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       price: null,
       topStatus: 'เริ่มต้นเดินทาง',
       instruction: 'กรุณาแตะบัตรอีกครั้งเมื่อลงรถ',
+      soundSequence: _tapInSuccessSounds(isNfc: isNfc),
     );
   }
 
@@ -1081,6 +1123,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
           'ไม่มีสัญญาณอินเทอร์เน็ต',
           'กรุณาเชื่อมต่ออินเทอร์เน็ตก่อนลงรถ',
           isSuccess: false,
+          soundSequence: _failureSounds(isNfc: isNfc),
         );
         return;
       }
@@ -1271,6 +1314,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                       balance: '475.00 ฿',
                       topStatus: 'บันทึกจุดลงรถแล้ว',
                       instruction: 'ระบบจะปรับยอดผ่าน POS อัตโนมัติ',
+                      soundSequence: _tapOutSuccessSounds(isNfc: isNfc),
                     );
                     return;
                   }
@@ -1300,6 +1344,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                         '475.00 ฿', // Should ideally come from real card/user balance
                     topStatus: 'ชำระเงินสำเร็จ (ทดสอบ)',
                     instruction: 'เดินทางปลอดภัย',
+                    soundSequence: _tapOutSuccessSounds(isNfc: isNfc),
                   );
                 } catch (e) {
                   debugPrint('[DEBUG] ❌ Payment Failed: $e');
@@ -1307,6 +1352,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                     'ชำระเงินไม่สำเร็จ',
                     'เกิดข้อผิดพลาดในการตัดเงิน: ${e.toString()}',
                     isSuccess: false,
+                    soundSequence: _failureSounds(isNfc: isNfc),
                   );
                 }
                 return; // End flow here since payment is handled
@@ -1334,16 +1380,23 @@ class _WelcomeScreenState extends State<WelcomeScreen>
           balance: '475.00 ฿',
           topStatus: 'บันทึกประวัติการเดินทาง',
           instruction: 'เดินทางปลอดภัย',
+          soundSequence: _tapOutSuccessSounds(isNfc: isNfc),
         );
       } else {
         _showResultDialog(
           'ทำรายการไม่สำเร็จ',
           'รหัสข้อผิดพลาด: ${response.statusCode}',
           isSuccess: false,
+          soundSequence: _failureSounds(isNfc: isNfc),
         );
       }
     } catch (e) {
-      _showResultDialog('เกิดข้อผิดพลาด', '$e', isSuccess: false);
+      _showResultDialog(
+        'เกิดข้อผิดพลาด',
+        '$e',
+        isSuccess: false,
+        soundSequence: _failureSounds(isNfc: isNfc),
+      );
     }
   }
 
@@ -1637,10 +1690,12 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     String? balance,
     String? topStatus,
     String? instruction,
+    List<AppSound> soundSequence = const [],
   }) {
     if (!mounted) return;
 
     _stopBackgroundScanning();
+    unawaited(AppAudioService.instance.playSequence(soundSequence));
 
     void handleDismiss(BuildContext ctx) {
       if (mounted) {
@@ -1714,6 +1769,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         'ไม่มีข้อมูลแตะขึ้น',
         'กรุณากดจำลองแตะขึ้นก่อน',
         isSuccess: false,
+        soundSequence: _failureSounds(isNfc: true, includeSourceCue: false),
       );
     }
   }
@@ -1731,7 +1787,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
           scannedUri.queryParameters.containsKey('aid')) {
         payloadMap = {
           'aid': scannedUri.queryParameters['aid'],
-          'bal': double.tryParse(scannedUri.queryParameters['bal'] ?? '') ?? 0.0,
+          'bal':
+              double.tryParse(scannedUri.queryParameters['bal'] ?? '') ?? 0.0,
           'exp': scannedUri.queryParameters['exp'],
         };
       } else {
@@ -1788,6 +1845,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
           'QR Code ไม่ถูกต้อง',
           'ไม่สามารถอ่านข้อมูลบัตรจาก QR Code นี้ได้',
           isSuccess: false,
+          soundSequence: _failureSounds(isNfc: false),
         );
         return;
       }
@@ -1798,10 +1856,12 @@ class _WelcomeScreenState extends State<WelcomeScreen>
           : qrData;
 
       if (pendingKey != null) {
-        debugPrint('[QR] Routing scan to TAP-OUT flow | aid=${effectiveQrData.aid}');
+        debugPrint(
+            '[QR] Routing scan to TAP-OUT flow | aid=${effectiveQrData.aid}');
         await _handleTapOut(effectiveQrData);
       } else {
-        debugPrint('[QR] Routing scan to TAP-IN flow | aid=${effectiveQrData.aid}');
+        debugPrint(
+            '[QR] Routing scan to TAP-IN flow | aid=${effectiveQrData.aid}');
         await _handleTapIn(effectiveQrData);
       }
     } finally {
@@ -2095,14 +2155,14 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                   ),
                                 )
                               else
-                              Text(
-                                'กรุณาแตะบัตร',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 32,
-                                  fontWeight: FontWeight.bold,
+                                Text(
+                                  'กรุณาแตะบัตร',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 32,
+                                    fontWeight: FontWeight.bold,
+                                  ),
                                 ),
-                              ),
                               const SizedBox(height: 16),
                               if (_showQrScanner)
                                 const Text(
@@ -2113,62 +2173,65 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                   ),
                                 )
                               else
-                              Text(
-                                'แตะบัตรที่จุดอ่านเพื่อชำระเงิน',
-                                style: TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 18,
+                                Text(
+                                  'แตะบัตรที่จุดอ่านเพื่อชำระเงิน',
+                                  style: TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 18,
+                                  ),
                                 ),
-                              ),
 
                               // === Debug Simulate Buttons ===
                               if (_showSimulateButtons) ...[
-                              const SizedBox(height: 20),
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  ElevatedButton.icon(
-                                    onPressed: () =>
-                                        _simulateTap(isTapOut: false),
-                                    icon: const Icon(Icons.login, size: 18),
-                                    label: const Text('จำลองแตะขึ้น'),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: Colors.green.shade700,
-                                      foregroundColor: Colors.white,
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 16,
-                                        vertical: 10,
-                                      ),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(20),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  ElevatedButton.icon(
-                                    onPressed: _pendingTransactions.containsKey(
-                                      'SIM-CARD-001',
-                                    )
-                                        ? () => _simulateTap(isTapOut: true)
-                                        : null,
-                                    icon: const Icon(Icons.logout, size: 18),
-                                    label: const Text('จำลองแตะลง'),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: Colors.red.shade700,
-                                      foregroundColor: Colors.white,
-                                      disabledBackgroundColor:
-                                          Colors.grey.shade600,
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 16,
-                                        vertical: 10,
-                                      ),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(20),
+                                const SizedBox(height: 20),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    ElevatedButton.icon(
+                                      onPressed: () =>
+                                          _simulateTap(isTapOut: false),
+                                      icon: const Icon(Icons.login, size: 18),
+                                      label: const Text('จำลองแตะขึ้น'),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.green.shade700,
+                                        foregroundColor: Colors.white,
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 16,
+                                          vertical: 10,
+                                        ),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(20),
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                ],
-                              ),
+                                    const SizedBox(width: 12),
+                                    ElevatedButton.icon(
+                                      onPressed: _pendingTransactions
+                                              .containsKey(
+                                        'SIM-CARD-001',
+                                      )
+                                          ? () => _simulateTap(isTapOut: true)
+                                          : null,
+                                      icon: const Icon(Icons.logout, size: 18),
+                                      label: const Text('จำลองแตะลง'),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.red.shade700,
+                                        foregroundColor: Colors.white,
+                                        disabledBackgroundColor:
+                                            Colors.grey.shade600,
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 16,
+                                          vertical: 10,
+                                        ),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(20),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ],
 
                               const Spacer(),
@@ -2562,6 +2625,12 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         _isAppDisabled = true;
       });
 
+      unawaited(
+        AppAudioService.instance.playSequence(
+          _failureSounds(isNfc: false, includeSourceCue: false),
+        ),
+      );
+
       if (mounted) {
         showDialog(
           context: context,
@@ -2651,6 +2720,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
           ),
         );
       }
+
+      unawaited(AppAudioService.instance.playSequence(_welcomeSoundSequence));
     }
   }
 }
