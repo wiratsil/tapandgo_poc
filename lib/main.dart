@@ -25,6 +25,7 @@ import 'services/database_helper.dart';
 import 'services/emv_transaction_service.dart';
 import 'models/emv_transaction_model.dart';
 import 'services/app_audio_service.dart';
+import 'services/receipt_image_service.dart';
 import 'package:sqflite/sqflite.dart';
 
 import 'package:qr_flutter/qr_flutter.dart';
@@ -75,6 +76,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   static const String _qrLandingPageUrl =
       'https://08hh39x2-5234.asse.devtunnels.ms/qrcode.html';
   static const String _qrScannerModeKey = 'show_qr_scanner';
+  static const String _receiptLogoAsset = 'assets/BMTA_Logo.png';
 
   final _posService = PosService();
   late MobileScannerController _qrScannerController;
@@ -212,6 +214,77 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   /// Format DateTime to UTC ISO 8601
   String _formatDateTime(DateTime dt) {
     return dt.toUtc().toIso8601String();
+  }
+
+  String _formatReceiptDateTime(DateTime dt) {
+    final local = dt.toLocal();
+    final hour = local.hour.toString().padLeft(2, '0');
+    final minute = local.minute.toString().padLeft(2, '0');
+    const months = [
+      'ม.ค.',
+      'ก.พ.',
+      'มี.ค.',
+      'เม.ย.',
+      'พ.ค.',
+      'มิ.ย.',
+      'ก.ค.',
+      'ส.ค.',
+      'ก.ย.',
+      'ต.ค.',
+      'พ.ย.',
+      'ธ.ค.',
+    ];
+    return '${local.day.toString().padLeft(2, '0')} ${months[local.month - 1]} ${local.year + 543}, $hour:$minute น.';
+  }
+
+  Future<void> _printArkeReceipt({
+    required String txnId,
+    required DateTime tapInTime,
+    required DateTime tapOutTime,
+    required String tapInStopName,
+    required String tapOutStopName,
+    required double fareAmount,
+    String? logNo,
+  }) async {
+    if (!_posService.isArke || fareAmount <= 0) return;
+
+    try {
+      debugPrint('[PRINT] Printing receipt for txnId=$txnId');
+      final imageBytes = await ReceiptImageService.buildReceiptImage(
+        logoAssetPath: _receiptLogoAsset,
+        title: 'รายการสำเร็จ',
+        statusText: 'การชำระเงินสำเร็จ',
+        timestampText: _formatReceiptDateTime(tapOutTime),
+        sectionTitle: 'ข้อมูลการชำระค่าโดยสาร',
+        fields: [
+          ReceiptImageField(label: 'สายรถโดยสาร', value: _plateNumber),
+          ReceiptImageField(label: 'เลขอ้างอิง', value: logNo ?? '-'),
+          ReceiptImageField(label: 'เลขที่ทำรายการ', value: txnId),
+          ReceiptImageField(
+            label: 'เวลาแตะขึ้น',
+            value: _formatReceiptDateTime(tapInTime),
+          ),
+          ReceiptImageField(
+            label: 'เวลาแตะลง',
+            value: _formatReceiptDateTime(tapOutTime),
+          ),
+          ReceiptImageField(label: 'สถานีต้นทาง', value: tapInStopName),
+          ReceiptImageField(label: 'สถานีปลายทาง', value: tapOutStopName),
+          const ReceiptImageField(label: 'จำนวนผู้โดยสาร', value: '1 ท่าน'),
+          const ReceiptImageField(label: 'ค่าธรรมเนียม', value: '0.00'),
+        ],
+        totalLabel: 'ค่าโดยสารรวม',
+        totalValue: fareAmount.toStringAsFixed(2),
+        paymentMethod: 'บัตร EMV',
+        discountText: 'ไม่มีสิทธิลดหย่อน',
+        transactionNo: txnId,
+        footerText: 'ขอบคุณที่ใช้บริการ',
+      );
+      await _posService.printImageBytes(imageBytes, align: 1);
+      debugPrint('[PRINT] Receipt printed successfully');
+    } catch (e) {
+      debugPrint('[PRINT] Receipt print failed: $e');
+    }
   }
 
   String _buildQrCodePayloadUrl(Map<String, dynamic> payload) {
@@ -1161,7 +1234,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     final txnItem = TransactionItem(
       txnId: _uuid.v4(),
       assetId: qrData.aid,
-      assetType: isNfc ? 'NFC' : 'QR',
+      assetType: isNfc ? 'NFC' : 'QRCODE',
       tapInTime: _formatDateTime(pending.tapInTime),
       tapInLoc: pending.tapInLoc,
       tapOutTime: _formatDateTime(tapOutTime),
@@ -1226,29 +1299,31 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         }
 
         // --- Queue EMV Transaction — รอ GPS ที่เวลาเลย tapOutTime ก่อนส่ง ---
-        final tapOutTime = DateTime.parse(
-          payload.transactions.first.tapOutTime,
-        );
-        _pendingEmvRequests.add(
-          _PendingEmvRequest(
-            payload: payload,
-            routeId: routeId,
-            tapOutTime: tapOutTime,
-            logNo: logNo,
-          ),
-        );
-        debugPrint('[EMV] ========== TAP-OUT EMV FLOW ==========');
-        debugPrint('[EMV] 📝 Queued EMV transaction (waiting for GPS)');
-        debugPrint('[EMV]   ├─ aid: $aid');
-        debugPrint('[EMV]   ├─ tapOutTime: $tapOutTime');
-        debugPrint(
-          '[EMV]   ├─ tapInGps resolved: ${_resolvedTapInGps.containsKey(aid)}',
-        );
-        debugPrint('[EMV]   ├─ GPS history size: ${_gpsHistory.length}');
-        debugPrint(
-          '[EMV]   └─ pending EMV queue size: ${_pendingEmvRequests.length}',
-        );
-        debugPrint('[EMV] ⏳ Waiting for GPS rec > $tapOutTime ...');
+        if (isNfc) {
+          final tapOutTime = DateTime.parse(
+            payload.transactions.first.tapOutTime,
+          );
+          _pendingEmvRequests.add(
+            _PendingEmvRequest(
+              payload: payload,
+              routeId: routeId,
+              tapOutTime: tapOutTime,
+              logNo: logNo,
+            ),
+          );
+          debugPrint('[EMV] ========== TAP-OUT EMV FLOW ==========');
+          debugPrint('[EMV] 📝 Queued EMV transaction (waiting for GPS)');
+          debugPrint('[EMV]   ├─ aid: $aid');
+          debugPrint('[EMV]   ├─ tapOutTime: $tapOutTime');
+          debugPrint(
+            '[EMV]   ├─ tapInGps resolved: ${_resolvedTapInGps.containsKey(aid)}',
+          );
+          debugPrint('[EMV]   ├─ GPS history size: ${_gpsHistory.length}');
+          debugPrint(
+            '[EMV]   └─ pending EMV queue size: ${_pendingEmvRequests.length}',
+          );
+          debugPrint('[EMV] ⏳ Waiting for GPS rec > $tapOutTime ...');
+        }
 
         // Find nearest bus stop for Tap Out & Calculate Fare
         String busStopName = 'ไม่พบข้อมูลป้าย';
@@ -1667,6 +1742,15 @@ class _WelcomeScreenState extends State<WelcomeScreen>
           debugPrint(
               '[EMV] 💰 Triggering VAS Settlement Adjustment: Amount=$fareAmount, LogNo=$logNo');
           await _posService.vasSettlementAdjustment(fareAmount, logNo);
+          await _printArkeReceipt(
+            txnId: firstTxn.txnId,
+            tapInTime: tapInTime,
+            tapOutTime: tapOutTime,
+            tapInStopName: tapInStop?.busstopDesc ?? '-',
+            tapOutStopName: tapOutStop?.busstopDesc ?? '-',
+            fareAmount: fareAmount,
+            logNo: logNo,
+          );
         } else {
           debugPrint(
               '[EMV] ⚠️ Cannot adjust settlement: logNo is null for txnId ${firstTxn.txnId}');

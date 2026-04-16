@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:cpay_sdk_plugin/cpay_sdk_plugin.dart';
 import 'package:arke_sdk_flutter/arke_sdk_flutter.dart';
@@ -302,11 +305,55 @@ class PosService {
 
   // ==================== Printing (Arke only) ====================
 
-  Future<void> printReceipt(String text) async {
+  Future<void> printReceipt(String text, {int align = 0}) async {
     if (_type == PosType.arke) {
-      await _arke.printText(text, align: 1);
+      await _arke.printText(text, align: align);
     } else {
       debugPrint('[PosService] Printing not supported on Cpay');
+    }
+  }
+
+  Future<void> printImageBytes(Uint8List imageBytes, {int align = 1}) async {
+    if (_type != PosType.arke) {
+      debugPrint('[PosService] Image printing not supported on Cpay');
+      return;
+    }
+
+    await _arke.printImage(imageBytes, align: align);
+  }
+
+  Future<void> printAssetImage(
+    String assetPath, {
+    int align = 1,
+    int? targetWidth = 80,
+  }) async {
+    if (_type != PosType.arke) {
+      debugPrint('[PosService] Image printing not supported on Cpay');
+      return;
+    }
+
+    try {
+      final data = await rootBundle.load(assetPath);
+      Uint8List imageBytes = data.buffer.asUint8List();
+
+      if (targetWidth != null && targetWidth > 0) {
+        final codec = await ui.instantiateImageCodec(
+          imageBytes,
+          targetWidth: targetWidth,
+        );
+        final frame = await codec.getNextFrame();
+        final resizedBytes = await frame.image.toByteData(
+          format: ui.ImageByteFormat.png,
+        );
+        if (resizedBytes != null) {
+          imageBytes = resizedBytes.buffer.asUint8List();
+        }
+      }
+
+      await _arke.printImage(imageBytes, align: align);
+    } catch (e) {
+      debugPrint('[PosService] printAssetImage error: $e');
+      rethrow;
     }
   }
 

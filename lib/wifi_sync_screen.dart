@@ -13,6 +13,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'models/gps_data_model.dart';
 import 'services/database_helper.dart';
 import 'services/pos_service.dart';
+import 'services/receipt_image_service.dart';
 
 /// Settings Screen - รวมข้อมูลรถ, WiFi Sync, และเกี่ยวกับแอป
 class SettingsScreen extends StatefulWidget {
@@ -56,6 +57,7 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  static const String _receiptLogoAsset = 'assets/BMTA_Logo.png';
   final WifiSyncService _syncService = WifiSyncService();
   final PosService _posService = PosService();
   final TextEditingController _hostIpController = TextEditingController(
@@ -572,6 +574,178 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Future<void> _printTestReceipt() async {
+    final messenger = ScaffoldMessenger.of(context);
+
+    try {
+      final imageBytes = await _buildTestReceiptImage();
+      if (!mounted) return;
+      await _showReceiptPreviewDialog(imageBytes, messenger);
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('สร้างตัวอย่างใบเสร็จไม่สำเร็จ: $e'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  Future<Uint8List> _buildTestReceiptImage() async {
+    final now = DateTime.now();
+    final date =
+        '${now.day.toString().padLeft(2, '0')} '
+        '${[
+          'ม.ค.',
+          'ก.พ.',
+          'มี.ค.',
+          'เม.ย.',
+          'พ.ค.',
+          'มิ.ย.',
+          'ก.ค.',
+          'ส.ค.',
+          'ก.ย.',
+          'ต.ค.',
+          'พ.ย.',
+          'ธ.ค.',
+        ][now.month - 1]} '
+        '${now.year + 543}, '
+        '${now.hour.toString().padLeft(2, '0')}:'
+        '${now.minute.toString().padLeft(2, '0')} น.';
+    const txnId = 'TXNTEST2025062000000048';
+    const refNo = '3090';
+
+    return ReceiptImageService.buildReceiptImage(
+      logoAssetPath: _receiptLogoAsset,
+      title: 'รายการสำเร็จ',
+      statusText: 'การชำระเงินสำเร็จ',
+      timestampText: date,
+      sectionTitle: 'ข้อมูลการชำระค่าโดยสาร',
+      fields: [
+        const ReceiptImageField(
+          label: 'ชื่อลูกค้า',
+          value: 'พิมพ์พันธุ์ สันแหลม',
+        ),
+        ReceiptImageField(
+          label: 'สายรถโดยสาร',
+          value: _currentPlateNumber.isNotEmpty ? _currentPlateNumber : '1-34 ปอ.',
+        ),
+        const ReceiptImageField(label: 'เลขอ้างอิง', value: refNo),
+        const ReceiptImageField(label: 'เส้นทางเดินรถ', value: 'เส้นทางปกติ'),
+        const ReceiptImageField(
+          label: 'สถานีต้นทาง',
+          value: 'ตรงข้ามซอยพหลโยธิน 51',
+        ),
+        const ReceiptImageField(
+          label: 'สถานีปลายทาง',
+          value: 'ตลาดบางเขน',
+        ),
+        const ReceiptImageField(label: 'จำนวนผู้โดยสาร', value: '1 ท่าน'),
+        const ReceiptImageField(label: 'ค่าธรรมเนียม', value: '0'),
+      ],
+      totalLabel: 'ค่าโดยสารรวม',
+      totalValue: '12.00',
+      paymentMethod: 'พร้อมเพย์',
+      discountText: 'ไม่มีสิทธิลดหย่อน',
+      transactionNo: txnId,
+      footerText: 'ทดสอบการพิมพ์ใบเสร็จ',
+    );
+  }
+
+  Future<void> _showReceiptPreviewDialog(
+    Uint8List imageBytes,
+    ScaffoldMessengerState messenger,
+  ) async {
+    await showDialog(
+      context: context,
+      builder: (dialogContext) {
+        bool isPrinting = false;
+
+        return StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            title: const Text('ตัวอย่างใบเสร็จ'),
+            content: SizedBox(
+              width: 320,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade200,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.grey.shade300),
+                      ),
+                      padding: const EdgeInsets.all(8),
+                      child: Image.memory(imageBytes, fit: BoxFit.contain),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'ตรวจสอบความเรียบร้อยก่อนพิมพ์',
+                      style: TextStyle(
+                        color: Colors.grey.shade700,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: isPrinting
+                    ? null
+                    : () => Navigator.of(dialogContext).pop(),
+                child: const Text('ยกเลิก'),
+              ),
+              ElevatedButton.icon(
+                onPressed: isPrinting
+                    ? null
+                    : () async {
+                        setDialogState(() {
+                          isPrinting = true;
+                        });
+
+                        try {
+                          await _posService.printImageBytes(imageBytes, align: 1);
+                          if (!mounted) return;
+                          Navigator.of(dialogContext).pop();
+                          messenger.showSnackBar(
+                            const SnackBar(
+                              content: Text('สั่งปริ้นใบเสร็จทดสอบแล้ว'),
+                              duration: Duration(seconds: 2),
+                            ),
+                          );
+                        } catch (e) {
+                          if (!mounted) return;
+                          setDialogState(() {
+                            isPrinting = false;
+                          });
+                          messenger.showSnackBar(
+                            SnackBar(
+                              content: Text('ปริ้นใบเสร็จทดสอบไม่สำเร็จ: $e'),
+                              duration: const Duration(seconds: 2),
+                            ),
+                          );
+                        }
+                      },
+                icon: isPrinting
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.print),
+                label: Text(isPrinting ? 'กำลังพิมพ์...' : 'พิมพ์'),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -2237,6 +2411,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 label: const Text('Settlement ผ่าน POS SDK'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.teal,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _printTestReceipt,
+                icon: const Icon(Icons.print),
+                label: const Text('ทดสอบปริ้นใบเสร็จ'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.indigo,
                   foregroundColor: Colors.white,
                 ),
               ),
