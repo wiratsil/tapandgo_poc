@@ -8,11 +8,13 @@ class ReceiptImageField {
   final String label;
   final String value;
   final bool highlight;
+  final TextAlign valueAlign;
 
   const ReceiptImageField({
     required this.label,
     required this.value,
     this.highlight = false,
+    this.valueAlign = TextAlign.right,
   });
 }
 
@@ -146,6 +148,7 @@ class ReceiptImageService {
             valueStyle: field.highlight ? totalValueStyle : valueStyle,
             labelWidth: labelColumnWidth,
             valueWidth: valueColumnWidth,
+            valueAlign: field.valueAlign,
           ),
         )
         .toList();
@@ -310,14 +313,15 @@ class ReceiptImageService {
     required TextStyle valueStyle,
     required double labelWidth,
     required double valueWidth,
+    TextAlign valueAlign = TextAlign.right,
   }) {
     final labelPainter = _layoutLeft('$label :', labelStyle, labelWidth);
     final valuePainter = TextPainter(
       text: TextSpan(text: value, style: valueStyle),
       textDirection: TextDirection.ltr,
-      textAlign: TextAlign.right,
+      textAlign: valueAlign,
       maxLines: null,
-    )..layout(maxWidth: valueWidth);
+    )..layout(minWidth: valueWidth, maxWidth: valueWidth);
 
     return _FieldLayout(
       labelPainter: labelPainter,

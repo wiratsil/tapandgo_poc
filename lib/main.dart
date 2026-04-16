@@ -268,8 +268,14 @@ class _WelcomeScreenState extends State<WelcomeScreen>
             label: 'เวลาแตะลง',
             value: _formatReceiptDateTime(tapOutTime),
           ),
-          ReceiptImageField(label: 'สถานีต้นทาง', value: tapInStopName),
-          ReceiptImageField(label: 'สถานีปลายทาง', value: tapOutStopName),
+          ReceiptImageField(
+            label: 'สถานีต้นทาง',
+            value: tapInStopName,
+          ),
+          ReceiptImageField(
+            label: 'สถานีปลายทาง',
+            value: tapOutStopName,
+          ),
           const ReceiptImageField(label: 'จำนวนผู้โดยสาร', value: '1 ท่าน'),
           const ReceiptImageField(label: 'ค่าธรรมเนียม', value: '0.00'),
         ],

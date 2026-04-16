@@ -597,22 +597,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<Uint8List> _buildTestReceiptImage() async {
     final now = DateTime.now();
-    final date =
-        '${now.day.toString().padLeft(2, '0')} '
+    final date = '${now.day.toString().padLeft(2, '0')} '
         '${[
-          'ม.ค.',
-          'ก.พ.',
-          'มี.ค.',
-          'เม.ย.',
-          'พ.ค.',
-          'มิ.ย.',
-          'ก.ค.',
-          'ส.ค.',
-          'ก.ย.',
-          'ต.ค.',
-          'พ.ย.',
-          'ธ.ค.',
-        ][now.month - 1]} '
+      'ม.ค.',
+      'ก.พ.',
+      'มี.ค.',
+      'เม.ย.',
+      'พ.ค.',
+      'มิ.ย.',
+      'ก.ค.',
+      'ส.ค.',
+      'ก.ย.',
+      'ต.ค.',
+      'พ.ย.',
+      'ธ.ค.',
+    ][now.month - 1]} '
         '${now.year + 543}, '
         '${now.hour.toString().padLeft(2, '0')}:'
         '${now.minute.toString().padLeft(2, '0')} น.';
@@ -629,23 +628,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const ReceiptImageField(
           label: 'ชื่อลูกค้า',
           value: 'พิมพ์พันธุ์ สันแหลม',
+          valueAlign: TextAlign.right,
         ),
         ReceiptImageField(
           label: 'สายรถโดยสาร',
-          value: _currentPlateNumber.isNotEmpty ? _currentPlateNumber : '1-34 ปอ.',
+          value:
+              _currentPlateNumber.isNotEmpty ? _currentPlateNumber : '1-34 ปอ.',
+          valueAlign: TextAlign.right,
         ),
-        const ReceiptImageField(label: 'เลขอ้างอิง', value: refNo),
-        const ReceiptImageField(label: 'เส้นทางเดินรถ', value: 'เส้นทางปกติ'),
+        const ReceiptImageField(
+            label: 'เลขอ้างอิง', value: refNo, valueAlign: TextAlign.right),
+        const ReceiptImageField(
+            label: 'เส้นทางเดินรถ',
+            value: 'เส้นทางปกติ',
+            valueAlign: TextAlign.right),
         const ReceiptImageField(
           label: 'สถานีต้นทาง',
           value: 'ตรงข้ามซอยพหลโยธิน 51',
+          valueAlign: TextAlign.right,
         ),
         const ReceiptImageField(
           label: 'สถานีปลายทาง',
           value: 'ตลาดบางเขน',
+          valueAlign: TextAlign.right,
         ),
-        const ReceiptImageField(label: 'จำนวนผู้โดยสาร', value: '1 ท่าน'),
-        const ReceiptImageField(label: 'ค่าธรรมเนียม', value: '0'),
+        const ReceiptImageField(
+            label: 'จำนวนผู้โดยสาร',
+            value: '1 ท่าน',
+            valueAlign: TextAlign.right),
+        const ReceiptImageField(
+            label: 'ค่าธรรมเนียม', value: '0', valueAlign: TextAlign.right),
       ],
       totalLabel: 'ค่าโดยสารรวม',
       totalValue: '12.00',
@@ -697,9 +709,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             actions: [
               TextButton(
-                onPressed: isPrinting
-                    ? null
-                    : () => Navigator.of(dialogContext).pop(),
+                onPressed:
+                    isPrinting ? null : () => Navigator.of(dialogContext).pop(),
                 child: const Text('ยกเลิก'),
               ),
               ElevatedButton.icon(
@@ -711,7 +722,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         });
 
                         try {
-                          await _posService.printImageBytes(imageBytes, align: 1);
+                          await _posService.printImageBytes(imageBytes,
+                              align: 1);
                           if (!mounted) return;
                           Navigator.of(dialogContext).pop();
                           messenger.showSnackBar(
