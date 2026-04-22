@@ -11,9 +11,11 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'models/gps_data_model.dart';
+import 'services/app_audio_service.dart';
 import 'services/database_helper.dart';
 import 'services/pos_service.dart';
 import 'services/receipt_image_service.dart';
+import 'system_checklist_screen.dart';
 
 /// Settings Screen - รวมข้อมูลรถ, WiFi Sync, และเกี่ยวกับแอป
 class SettingsScreen extends StatefulWidget {
@@ -577,6 +579,55 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  bool _hasFreshGpsSignal() {
+    if (_localGpsHistory.isEmpty) return false;
+
+    final latestGps = _localGpsHistory.last;
+    if (latestGps.lat == 0 || latestGps.lng == 0) return false;
+
+    final recordedAt = latestGps.rec?.toLocal();
+    if (recordedAt == null) return true;
+
+    final ageSeconds = DateTime.now().difference(recordedAt).inSeconds;
+    return ageSeconds >= -60 && ageSeconds <= 300;
+  }
+
+  Future<void> _openSystemChecklist() async {
+    final activeTrip = await _dbHelper.getActiveBusTrip();
+    if (!mounted) return;
+
+    final routeId = activeTrip?.routeId ?? widget.activeRouteId;
+    final routeLabel = routeId != null && routeId != 0 ? '$routeId' : '-';
+    final activeBusNo = activeTrip?.busno.trim() ?? '';
+    final plateNumber = _currentPlateNumber.trim();
+    final busLabel = activeBusNo.isNotEmpty
+        ? activeBusNo
+        : plateNumber.isNotEmpty
+            ? plateNumber
+            : '-';
+    final hasRouteData = _routeDetailsCount > 0 && _priceRangesCount > 0;
+    final tripReady = activeTrip != null ||
+        ((widget.activeRouteId ?? 0) != 0 && hasRouteData);
+    final readerReady =
+        _posService.type != PosType.unknown || _localShowQrScanner;
+
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SystemChecklistScreen(
+          routeLabel: routeLabel,
+          busLabel: busLabel,
+          internetReady: _hasInternet,
+          initialGpsReady: _hasFreshGpsSignal(),
+          tripReady: tripReady,
+          readerReady: readerReady,
+          audioReady: AppAudioService.instance.isReady,
+          tripStatusLabel: tripReady ? 'Status 3' : 'Status -',
+          gpsStream: widget.gpsStream,
+        ),
+      ),
+    );
+  }
+
   Future<void> _printTestReceipt() async {
     final messenger = ScaffoldMessenger.of(context);
 
@@ -678,84 +729,89 @@ class _SettingsScreenState extends State<SettingsScreen> {
         bool isPrinting = false;
 
         return StatefulBuilder(
-          builder: (context, setDialogState) => AlertDialog(
-            title: const Text('ตัวอย่างใบเสร็จ'),
-            content: SizedBox(
-              width: 320,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      decoration: BoxDecoration(
-                        color: Colors.grey.shade200,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.grey.shade300),
+          builder: (context, setDialogState) {
+            final dialogNavigator = Navigator.of(dialogContext);
+
+            return AlertDialog(
+              title: const Text('ตัวอย่างใบเสร็จ'),
+              content: SizedBox(
+                width: 320,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade200,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.grey.shade300),
+                        ),
+                        padding: const EdgeInsets.all(8),
+                        child: Image.memory(imageBytes, fit: BoxFit.contain),
                       ),
-                      padding: const EdgeInsets.all(8),
-                      child: Image.memory(imageBytes, fit: BoxFit.contain),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      'ตรวจสอบความเรียบร้อยก่อนพิมพ์',
-                      style: TextStyle(
-                        color: Colors.grey.shade700,
-                        fontSize: 13,
+                      const SizedBox(height: 12),
+                      Text(
+                        'ตรวจสอบความเรียบร้อยก่อนพิมพ์',
+                        style: TextStyle(
+                          color: Colors.grey.shade700,
+                          fontSize: 13,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
-            ),
-            actions: [
-              TextButton(
-                onPressed:
-                    isPrinting ? null : () => Navigator.of(dialogContext).pop(),
-                child: const Text('ยกเลิก'),
-              ),
-              ElevatedButton.icon(
-                onPressed: isPrinting
-                    ? null
-                    : () async {
-                        setDialogState(() {
-                          isPrinting = true;
-                        });
-
-                        try {
-                          await _posService.printImageBytes(imageBytes,
-                              align: 1);
-                          if (!mounted) return;
-                          Navigator.of(dialogContext).pop();
-                          messenger.showSnackBar(
-                            const SnackBar(
-                              content: Text('สั่งปริ้นใบเสร็จทดสอบแล้ว'),
-                              duration: Duration(seconds: 2),
-                            ),
-                          );
-                        } catch (e) {
-                          if (!mounted) return;
+              actions: [
+                TextButton(
+                  onPressed: isPrinting
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(),
+                  child: const Text('ยกเลิก'),
+                ),
+                ElevatedButton.icon(
+                  onPressed: isPrinting
+                      ? null
+                      : () async {
                           setDialogState(() {
-                            isPrinting = false;
+                            isPrinting = true;
                           });
-                          messenger.showSnackBar(
-                            SnackBar(
-                              content: Text('ปริ้นใบเสร็จทดสอบไม่สำเร็จ: $e'),
-                              duration: const Duration(seconds: 2),
-                            ),
-                          );
-                        }
-                      },
-                icon: isPrinting
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.print),
-                label: Text(isPrinting ? 'กำลังพิมพ์...' : 'พิมพ์'),
-              ),
-            ],
-          ),
+
+                          try {
+                            await _posService.printImageBytes(imageBytes,
+                                align: 1);
+                            if (!mounted) return;
+                            dialogNavigator.pop();
+                            messenger.showSnackBar(
+                              const SnackBar(
+                                content: Text('สั่งปริ้นใบเสร็จทดสอบแล้ว'),
+                                duration: Duration(seconds: 2),
+                              ),
+                            );
+                          } catch (e) {
+                            if (!mounted) return;
+                            setDialogState(() {
+                              isPrinting = false;
+                            });
+                            messenger.showSnackBar(
+                              SnackBar(
+                                content: Text('ปริ้นใบเสร็จทดสอบไม่สำเร็จ: $e'),
+                                duration: const Duration(seconds: 2),
+                              ),
+                            );
+                          }
+                        },
+                  icon: isPrinting
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.print),
+                  label: Text(isPrinting ? 'กำลังพิมพ์...' : 'พิมพ์'),
+                ),
+              ],
+            );
+          },
         );
       },
     );
@@ -2415,6 +2471,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ],
             ),
             const Divider(height: 24),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _openSystemChecklist,
+                icon: const Icon(Icons.fact_check_rounded),
+                label: const Text('ตรวจสอบความพร้อมระบบ'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.black87,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(

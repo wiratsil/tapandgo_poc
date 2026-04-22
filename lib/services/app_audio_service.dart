@@ -29,6 +29,8 @@ class AppAudioService {
   final List<AudioPlayer> _activePlayers = [];
   static const Duration _sequenceOverlap = Duration(milliseconds: 30);
 
+  bool get isReady => _isInitialized && !_isDisposed;
+
   Future<void> init() async {
     if (_isInitialized || _isDisposed) return;
     _isInitialized = true;

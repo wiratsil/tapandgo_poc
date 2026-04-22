@@ -26,6 +26,7 @@ import 'services/emv_transaction_service.dart';
 import 'models/emv_transaction_model.dart';
 import 'services/app_audio_service.dart';
 import 'services/receipt_image_service.dart';
+import 'system_checklist_screen.dart';
 import 'package:sqflite/sqflite.dart';
 
 import 'package:qr_flutter/qr_flutter.dart';
@@ -39,6 +40,18 @@ class MyHttpOverrides extends HttpOverrides {
       ..badCertificateCallback =
           (X509Certificate cert, String host, int port) => true;
   }
+}
+
+class _SystemCheckIssue {
+  final String topic;
+  final String indicator;
+  final String impact;
+
+  const _SystemCheckIssue({
+    required this.topic,
+    required this.indicator,
+    required this.impact,
+  });
 }
 
 void main() async {
@@ -320,6 +333,15 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   String _lastScanLog = '';
   String _latestLogNo = '';
   Timer? _timer;
+  Timer? _systemChecklistTimer;
+  bool _hasInternet = false;
+  int _routeDetailsCount = 0;
+  int _priceRangesCount = 0;
+  bool _lastChecklistGpsReady = false;
+  bool _lastChecklistAudioReady = false;
+  bool _hasActiveBusTrip = false;
+  int? _checklistRouteId;
+  String _checklistBusNo = '';
 
   Widget _buildLoadingUI() {
     return Container(
@@ -392,6 +414,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       // Initialize POS Service FIRST (Detect Device: Arke or CPay)
       await _posService.init();
       await _posService.initVas(); // Initialize VAS Service
+      if (mounted) setState(() {});
 
       // Set up VAS event listener
       _posService.onVasEvent?.listen((event) async {
@@ -512,6 +535,11 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       _updateTime();
       _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
       await AppAudioService.instance.init();
+      unawaited(_refreshSystemChecklistStatus());
+      _systemChecklistTimer = Timer.periodic(
+        const Duration(seconds: 10),
+        (_) => unawaited(_refreshSystemChecklistStatus()),
+      );
 
       // Set up MQTT GPS listener
       _gpsSubscription = _mqttService.gpsStream.listen((gpsData) async {
@@ -714,6 +742,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       setState(() {
         _activeRouteId = result.activeRouteId;
       });
+      unawaited(_refreshSystemChecklistStatus());
     }
   }
 
@@ -729,6 +758,13 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       _pendingEmvRequests.clear();
       _pendingTapInGpsQueue.clear();
       _resolvedTapInGps.clear();
+      _routeDetailsCount = 0;
+      _priceRangesCount = 0;
+      _lastChecklistGpsReady = false;
+      _lastChecklistAudioReady = false;
+      _hasActiveBusTrip = false;
+      _checklistRouteId = null;
+      _checklistBusNo = '';
     });
 
     // 3. Save (overwrite) pending transactions in SharedPreferences to empty
@@ -738,6 +774,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     _hasAutoSynced = false;
     await Future.delayed(const Duration(milliseconds: 500));
     await _syncData();
+    unawaited(_refreshSystemChecklistStatus());
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -827,6 +864,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     setState(() => _showQrScanner = value);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_qrScannerModeKey, value);
+    unawaited(_refreshSystemChecklistStatus());
     debugPrint(
       '[QR] Display mode changed to: ${value ? "Scanner" : "QR Code"}',
     );
@@ -850,6 +888,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
+    _systemChecklistTimer?.cancel();
     _pendingSyncSubscription?.cancel();
     _gpsSubscription?.cancel();
     _mqttService.disconnect();
@@ -1267,6 +1306,160 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     } catch (_) {
       return false;
     }
+  }
+
+  bool _hasFreshGpsSignal() {
+    final latestGps =
+        _currentGpsData ?? (_gpsHistory.isNotEmpty ? _gpsHistory.last : null);
+    if (latestGps == null || latestGps.lat == 0 || latestGps.lng == 0) {
+      return false;
+    }
+
+    final recordedAt = latestGps.rec?.toLocal();
+    if (recordedAt == null) return true;
+
+    final ageSeconds = DateTime.now().difference(recordedAt).inSeconds;
+    return ageSeconds >= -60 && ageSeconds <= 300;
+  }
+
+  bool get _isTripReady =>
+      _hasActiveBusTrip ||
+      ((_activeRouteId ?? 0) != 0 &&
+          _routeDetailsCount > 0 &&
+          _priceRangesCount > 0);
+
+  bool get _isReaderReady =>
+      _posService.type != PosType.unknown || _showQrScanner;
+
+  bool get _isAudioReady => AppAudioService.instance.isReady;
+
+  bool get _isSystemReady =>
+      _hasInternet &&
+      _hasFreshGpsSignal() &&
+      _isTripReady &&
+      _isReaderReady &&
+      _isAudioReady;
+
+  Future<void> _refreshSystemChecklistStatus() async {
+    final hasInternet = await _checkInternetConnection();
+    final activeTrip = await _dbHelper.getActiveBusTrip();
+    final routeDetailsCount = await _dbHelper.getRouteDetailsCount();
+    final priceRangesCount = await _dbHelper.getPriceRangesCount();
+
+    if (!mounted) return;
+
+    final nextRouteId = activeTrip?.routeId ?? _activeRouteId;
+    final nextBusNo = activeTrip?.busno.trim() ?? '';
+    final gpsReady = _hasFreshGpsSignal();
+    final audioReady = _isAudioReady;
+    final hasActiveBusTrip = activeTrip != null;
+
+    if (_hasInternet != hasInternet ||
+        _routeDetailsCount != routeDetailsCount ||
+        _priceRangesCount != priceRangesCount ||
+        _lastChecklistGpsReady != gpsReady ||
+        _lastChecklistAudioReady != audioReady ||
+        _hasActiveBusTrip != hasActiveBusTrip ||
+        _checklistRouteId != nextRouteId ||
+        _checklistBusNo != nextBusNo) {
+      setState(() {
+        _hasInternet = hasInternet;
+        _routeDetailsCount = routeDetailsCount;
+        _priceRangesCount = priceRangesCount;
+        _lastChecklistGpsReady = gpsReady;
+        _lastChecklistAudioReady = audioReady;
+        _hasActiveBusTrip = hasActiveBusTrip;
+        _checklistRouteId = nextRouteId;
+        _checklistBusNo = nextBusNo;
+      });
+    }
+  }
+
+  Future<void> _openSystemChecklist() async {
+    unawaited(_refreshSystemChecklistStatus());
+
+    final routeId = _checklistRouteId ?? _activeRouteId;
+    final routeLabel = routeId != null && routeId != 0 ? '$routeId' : '-';
+    final busLabel = _checklistBusNo.isNotEmpty
+        ? _checklistBusNo
+        : _plateNumber.trim().isNotEmpty
+            ? _plateNumber.trim()
+            : '-';
+
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SystemChecklistScreen(
+          routeLabel: routeLabel,
+          busLabel: busLabel,
+          internetReady: _hasInternet,
+          initialGpsReady: _hasFreshGpsSignal(),
+          tripReady: _isTripReady,
+          readerReady: _isReaderReady,
+          audioReady: _isAudioReady,
+          tripStatusLabel: _isTripReady ? 'Status 3' : 'Status -',
+          gpsStream: _mqttService.gpsStream,
+        ),
+      ),
+    );
+
+    unawaited(_refreshSystemChecklistStatus());
+  }
+
+  List<_SystemCheckIssue> get _systemCheckIssues {
+    final issues = <_SystemCheckIssue>[];
+
+    if (!_hasInternet) {
+      issues.add(
+        const _SystemCheckIssue(
+          topic: 'สัญญาณ Internet',
+          indicator: 'สถานะการเชื่อมต่อ 4G/5G',
+          impact: 'ตัดเงินจาก Wallet ไม่ได้, แจ้งเตือนไป Staff App ไม่ทำงาน',
+        ),
+      );
+    }
+
+    if (!_hasFreshGpsSignal()) {
+      issues.add(
+        const _SystemCheckIssue(
+          topic: 'สัญญาณ GPS',
+          indicator: 'พิกัดปัจจุบัน (Latitude/Longitude)',
+          impact: 'ระบบไม่รู้ว่ารถอยู่ป้ายไหน คำนวณค่าโดยสารตามระยะทางไม่ได้',
+        ),
+      );
+    }
+
+    if (!_isTripReady) {
+      issues.add(
+        const _SystemCheckIssue(
+          topic: 'สถานะเที่ยวรถ',
+          indicator: 'เที่ยวรถในระบบ (Status 3)',
+          impact:
+              'พขร. จะกด "เริ่มเดินรถ" ไม่ได้ และนายท่าจะปิดงานบน Web ไม่ได้',
+        ),
+      );
+    }
+
+    if (!_isReaderReady) {
+      issues.add(
+        const _SystemCheckIssue(
+          topic: 'ระบบ Reader',
+          indicator: 'หัวอ่านบัตร EMV และ QR Code',
+          impact: 'ผู้โดยสารแตะบัตรแล้วเครื่องไม่ตอบสนอง',
+        ),
+      );
+    }
+
+    if (!_isAudioReady) {
+      issues.add(
+        const _SystemCheckIssue(
+          topic: 'ระบบเสียง (Audio)',
+          indicator: 'ลำโพงแจ้งเตือนบนเครื่อง',
+          impact: 'พขร. จะไม่ได้ยินเสียงเตือนเมื่อชำระเงินสำเร็จหรือล้มเหลว',
+        ),
+      );
+    }
+
+    return issues;
   }
 
   Future<void> _submitTransaction(
@@ -2014,6 +2207,156 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     );
   }
 
+  Widget _buildMainSystemStatusButton() {
+    final isReady = _isSystemReady;
+    final statusColor = isReady ? Colors.greenAccent : Colors.amberAccent;
+    final backgroundColor = isReady
+        ? Colors.greenAccent.withOpacity(0.16)
+        : Colors.orangeAccent.withOpacity(0.18);
+    final borderColor = isReady
+        ? Colors.greenAccent.withOpacity(0.75)
+        : Colors.amberAccent.withOpacity(0.85);
+
+    return GestureDetector(
+      onTap: _openSystemChecklist,
+      child: Container(
+        width: 38,
+        height: 38,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: backgroundColor,
+          shape: BoxShape.circle,
+          border: Border.all(color: borderColor),
+        ),
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Icon(
+              isReady ? Icons.verified_rounded : Icons.warning_amber_rounded,
+              color: statusColor,
+              size: 22,
+            ),
+            if (!isReady)
+              Positioned(
+                right: -2,
+                top: -2,
+                child: Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: Colors.redAccent,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 1),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMainIssueAlert() {
+    final issues = _systemCheckIssues;
+    if (issues.isEmpty) return const SizedBox.shrink();
+
+    final issueNames = issues.map((issue) => issue.topic).join(', ');
+
+    return GestureDetector(
+      onTap: _openSystemChecklist,
+      child: Container(
+        width: double.infinity,
+        margin: const EdgeInsets.symmetric(horizontal: 14),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFF2B1114).withOpacity(0.92),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.redAccent.withOpacity(0.82)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.22),
+              blurRadius: 12,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 220),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.warning_amber_rounded,
+                      color: Colors.amberAccent,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'พบข้อขัดข้อง: $issueNames',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                ...issues.map(
+                  (issue) => Padding(
+                    padding: const EdgeInsets.only(top: 7),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${issue.topic}: ${issue.indicator}',
+                          style: const TextStyle(
+                            color: Color(0xFFFFD6D6),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          issue.impact,
+                          style: const TextStyle(
+                            color: Color(0xFFFFA8A8),
+                            fontSize: 12,
+                            height: 1.25,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFloatingIssueAlert() {
+    if (_systemCheckIssues.isEmpty) return const SizedBox.shrink();
+
+    return SafeArea(
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: Padding(
+          padding: const EdgeInsets.only(top: 104),
+          child: _buildMainIssueAlert(),
+        ),
+      ),
+    );
+  }
+
   // ============ UI Build ============
   @override
   Widget build(BuildContext context) {
@@ -2113,19 +2456,6 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                           ),
                                           SizedBox(width: 16),
                                         ],
-                                        Text(
-                                          'สัญญาณปกติ',
-                                          style: TextStyle(
-                                            color: Colors.greenAccent,
-                                            fontSize: 14,
-                                          ),
-                                        ),
-                                        SizedBox(width: 8),
-                                        Icon(
-                                          Icons.signal_cellular_4_bar,
-                                          color: Colors.greenAccent,
-                                          size: 20,
-                                        ),
                                       ],
                                     ),
                                   ],
@@ -2207,7 +2537,6 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                   ],
                                 ),
                               ),
-
                               const Spacer(),
 
                               // Center Content - QR Preview
@@ -2365,10 +2694,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                                         ],
                                       ),
                                     ),
-                                    const SizedBox(width: 16),
-
-                                    // Removed Status Icons here
-                                    // Settings Button
+                                    const SizedBox(width: 10),
+                                    _buildMainSystemStatusButton(),
+                                    const SizedBox(width: 10),
                                     GestureDetector(
                                       onTap: () async {
                                         await Navigator.of(context).push(
@@ -2462,6 +2790,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
               ),
             ),
           ),
+
+          _buildFloatingIssueAlert(),
 
           // === Loading overlay during plate change ===
           if (_isPlateChanging)
@@ -2592,6 +2922,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     setState(() => _isOfflineMode = value);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('offline_mode', value);
+    unawaited(_refreshSystemChecklistStatus());
     debugPrint('[OFFLINE] Mode set to: $value');
   }
 
@@ -2618,6 +2949,13 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       _currentStationSeq = null;
       _nextStation = '';
       _nextStationSeq = null;
+      _routeDetailsCount = 0;
+      _priceRangesCount = 0;
+      _lastChecklistGpsReady = false;
+      _lastChecklistAudioReady = false;
+      _hasActiveBusTrip = false;
+      _checklistRouteId = null;
+      _checklistBusNo = '';
     });
 
     // Step 2: Save to SharedPreferences
@@ -2663,6 +3001,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
             setState(() {
               _activeRouteId = syncResult?.activeRouteId;
             });
+            unawaited(_refreshSystemChecklistStatus());
           }
         }
       } catch (e) {
@@ -2694,6 +3033,14 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         debugPrint(
           '[PLATE] 📊 Data check: routes=$routeCount prices=$priceCount trips=$tripCount',
         );
+
+        if (mounted) {
+          setState(() {
+            _routeDetailsCount = routeCount;
+            _priceRangesCount = priceCount;
+            _hasActiveBusTrip = tripCount > 0;
+          });
+        }
 
         if (routeCount == 0)
           _plateChangeErrors.add('⚠️ ไม่พบข้อมูลเส้นทาง (route_details)');
