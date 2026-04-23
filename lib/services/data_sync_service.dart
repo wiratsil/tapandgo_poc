@@ -118,8 +118,8 @@ class DataSyncService {
 
         for (var file in versionData.files) {
           debugPrint('[DEBUG] 📥 Downloading file from: ${file.url}');
-          final jsonString = await _syncDownloadService
-              .downloadAndDecompressJson(file.url);
+          final jsonString =
+              await _syncDownloadService.downloadAndDecompressJson(file.url);
           if (jsonString != null) {
             debugPrint(
               '[DEBUG] ✅ Decompressed JSON string length: ${jsonString.length}',

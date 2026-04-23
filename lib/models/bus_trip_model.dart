@@ -13,8 +13,7 @@ class BusTripResponse {
     return BusTripResponse(
       isSuccess: json['isSuccess'] ?? false,
       message: json['message'] ?? '',
-      data:
-          (json['data'] as List?)
+      data: (json['data'] as List?)
               ?.map((item) => BusTrip.fromJson(item))
               .toList() ??
           [],
@@ -31,6 +30,8 @@ class BusTrip {
   final String busno;
   final DateTime? actualDatetimeFromSource;
   final DateTime? actualDatetimeToDestination;
+  final bool isFlatRate;
+  final double flatPrice;
 
   BusTrip({
     required this.id,
@@ -41,6 +42,8 @@ class BusTrip {
     required this.busno,
     this.actualDatetimeFromSource,
     this.actualDatetimeToDestination,
+    this.isFlatRate = false,
+    this.flatPrice = 0,
   });
 
   factory BusTrip.fromJson(Map<String, dynamic> json) {
@@ -57,6 +60,8 @@ class BusTrip {
       actualDatetimeToDestination: json['actualDatetimeToDestination'] != null
           ? DateTime.tryParse(json['actualDatetimeToDestination'].toString())
           : null,
+      isFlatRate: _parseBool(json['isFlatRate']),
+      flatPrice: _parseDouble(json['flatPrice']),
     );
   }
 
@@ -69,8 +74,26 @@ class BusTrip {
       'licensePlate': licensePlate,
       'busno': busno,
       'actualDatetimeFromSource': actualDatetimeFromSource?.toIso8601String(),
-      'actualDatetimeToDestination': actualDatetimeToDestination
-          ?.toIso8601String(),
+      'actualDatetimeToDestination':
+          actualDatetimeToDestination?.toIso8601String(),
+      'isFlatRate': isFlatRate ? 1 : 0,
+      'flatPrice': flatPrice,
     };
+  }
+
+  static bool _parseBool(dynamic value) {
+    if (value is bool) return value;
+    if (value is num) return value != 0;
+    if (value is String) {
+      final normalized = value.toLowerCase().trim();
+      return normalized == 'true' || normalized == '1';
+    }
+    return false;
+  }
+
+  static double _parseDouble(dynamic value) {
+    if (value is num) return value.toDouble();
+    if (value is String) return double.tryParse(value) ?? 0;
+    return 0;
   }
 }

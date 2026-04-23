@@ -63,19 +63,20 @@ class MqttService {
 
   Future<bool> connect(String plateNo) async {
     _intentionalDisconnect = false;
-    
+
     if (client.connectionStatus?.state == MqttConnectionState.connected) {
       if (_currentPlateNo == plateNo) {
         debugPrint('[MQTT] Already connected and subscribed to $plateNo');
         return true;
       } else {
-        debugPrint('[MQTT] Changing subscription from $_currentPlateNo to $plateNo');
+        debugPrint(
+            '[MQTT] Changing subscription from $_currentPlateNo to $plateNo');
         if (_currentPlateNo != null && _currentPlateNo!.isNotEmpty) {
           client.unsubscribe('/gps/$_currentPlateNo');
           client.unsubscribe('/trip/$_currentPlateNo');
         }
         _currentPlateNo = plateNo;
-        
+
         if (_currentPlateNo != null && _currentPlateNo!.isNotEmpty) {
           client.subscribe('/gps/$_currentPlateNo', MqttQos.atLeastOnce);
           client.subscribe('/trip/$_currentPlateNo', MqttQos.atLeastOnce);

@@ -21,7 +21,12 @@ class DatabaseHelper {
 
   Future<Database> _initDatabase() async {
     String path = join(await getDatabasesPath(), 'tapandgo.db');
-    return await openDatabase(path, version: 1, onCreate: _onCreate);
+    return await openDatabase(
+      path,
+      version: 2,
+      onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
+    );
   }
 
   Future<void> _onCreate(Database db, int version) async {
@@ -73,9 +78,42 @@ class DatabaseHelper {
         licensePlate TEXT,
         busno TEXT,
         actualDatetimeFromSource TEXT,
-        actualDatetimeToDestination TEXT
+        actualDatetimeToDestination TEXT,
+        isFlatRate INTEGER DEFAULT 0,
+        flatPrice REAL DEFAULT 0
       )
     ''');
+  }
+
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await _addColumnIfMissing(
+        db,
+        tableName: 'bus_trips',
+        columnName: 'isFlatRate',
+        definition: 'INTEGER DEFAULT 0',
+      );
+      await _addColumnIfMissing(
+        db,
+        tableName: 'bus_trips',
+        columnName: 'flatPrice',
+        definition: 'REAL DEFAULT 0',
+      );
+    }
+  }
+
+  Future<void> _addColumnIfMissing(
+    Database db, {
+    required String tableName,
+    required String columnName,
+    required String definition,
+  }) async {
+    final columns = await db.rawQuery('PRAGMA table_info($tableName)');
+    final exists = columns.any((column) => column['name'] == columnName);
+    if (!exists) {
+      await db
+          .execute('ALTER TABLE $tableName ADD COLUMN $columnName $definition');
+    }
   }
 
   // Insert methods
@@ -288,9 +326,8 @@ class DatabaseHelper {
       args.add(routeId);
     }
 
-    String whereClause = conditions.isNotEmpty
-        ? 'WHERE ${conditions.join(' AND ')}'
-        : '';
+    String whereClause =
+        conditions.isNotEmpty ? 'WHERE ${conditions.join(' AND ')}' : '';
 
     final List<Map<String, dynamic>> maps = await db.rawQuery('''
       SELECT * FROM route_details 
@@ -324,28 +361,32 @@ class DatabaseHelper {
   /// Get all route details ordered by seq
   Future<List<RouteDetail>> getAllRouteDetails() async {
     final db = await database;
-    final maps = await db.rawQuery('SELECT * FROM route_details ORDER BY seq ASC');
+    final maps =
+        await db.rawQuery('SELECT * FROM route_details ORDER BY seq ASC');
     return maps.map((m) => RouteDetail.fromJson(m)).toList();
   }
 
   /// Get all price ranges ordered by startSeq
   Future<List<PriceRange>> getAllPriceRanges() async {
     final db = await database;
-    final maps = await db.rawQuery('SELECT * FROM price_ranges ORDER BY routeDetailStartSeq ASC');
+    final maps = await db.rawQuery(
+        'SELECT * FROM price_ranges ORDER BY routeDetailStartSeq ASC');
     return maps.map((m) => PriceRange.fromJson(m)).toList();
   }
 
   /// Get count of route details
   Future<int> getRouteDetailsCount() async {
     final db = await database;
-    final result = await db.rawQuery('SELECT COUNT(*) as cnt FROM route_details');
+    final result =
+        await db.rawQuery('SELECT COUNT(*) as cnt FROM route_details');
     return Sqflite.firstIntValue(result) ?? 0;
   }
 
   /// Get count of price ranges
   Future<int> getPriceRangesCount() async {
     final db = await database;
-    final result = await db.rawQuery('SELECT COUNT(*) as cnt FROM price_ranges');
+    final result =
+        await db.rawQuery('SELECT COUNT(*) as cnt FROM price_ranges');
     return Sqflite.firstIntValue(result) ?? 0;
   }
 }

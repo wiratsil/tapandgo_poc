@@ -62,6 +62,8 @@ class EmvFareInfo {
   final double expressAmount;
   final double fareAmount;
   final double totalAmount;
+  final bool isFlatRate;
+  final double flatPrice;
 
   EmvFareInfo({
     required this.bustripId,
@@ -75,6 +77,8 @@ class EmvFareInfo {
     required this.expressAmount,
     required this.fareAmount,
     required this.totalAmount,
+    this.isFlatRate = false,
+    this.flatPrice = 0,
   });
 
   Map<String, dynamic> toJson() {
@@ -90,6 +94,8 @@ class EmvFareInfo {
       'express_amount': expressAmount,
       'fare_amount': fareAmount,
       'total_amount': totalAmount,
+      'isFlatRate': isFlatRate,
+      'flatPrice': flatPrice,
     };
   }
 }
@@ -135,18 +141,29 @@ class EmvTransactionRequest {
   final String deviceId;
   final String plateNo;
   final List<EmvTransactionItem> transactions;
+  final bool? isFlatRate;
+  final double? flatPrice;
 
   EmvTransactionRequest({
     required this.deviceId,
     required this.plateNo,
     required this.transactions,
+    this.isFlatRate,
+    this.flatPrice,
   });
 
   Map<String, dynamic> toJson() {
-    return {
+    final json = {
       'device_id': deviceId,
       'plate_no': plateNo,
       'transactions': transactions.map((e) => e.toJson()).toList(),
     };
+    if (isFlatRate != null) {
+      json['isFlatRate'] = isFlatRate as Object;
+    }
+    if (flatPrice != null) {
+      json['flatPrice'] = flatPrice as Object;
+    }
+    return json;
   }
 }

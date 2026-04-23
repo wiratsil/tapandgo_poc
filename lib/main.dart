@@ -24,6 +24,7 @@ import 'services/data_sync_service.dart';
 import 'services/database_helper.dart';
 import 'services/emv_transaction_service.dart';
 import 'models/emv_transaction_model.dart';
+import 'models/bus_trip_model.dart';
 import 'services/app_audio_service.dart';
 import 'services/receipt_image_service.dart';
 import 'system_checklist_screen.dart';
@@ -90,6 +91,12 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       'https://08hh39x2-5234.asse.devtunnels.ms/qrcode.html';
   static const String _qrScannerModeKey = 'show_qr_scanner';
   static const String _receiptLogoAsset = 'assets/BMTA_Logo.png';
+  static final Uri _transactionsUrl = Uri.parse(
+    'https://tng-platform-dev.atlasicloud.com/api/tng/tap/transactions',
+  );
+  static final Uri _flatRateTransactionsUrl = Uri.parse(
+    'https://tng-platform-dev.atlasicloud.com/api/tng/tap/transactions/flat-rate',
+  );
 
   final _posService = PosService();
   late MobileScannerController _qrScannerController;
@@ -399,6 +406,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     super.initState();
     _qrScannerController = _createQrScannerController();
     WidgetsBinding.instance.addObserver(this);
+    _ignoreNfcEventsUntil = DateTime.now().add(_startupNfcWarmup);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _loadPlateNumber();
       _loadPendingTransactions();
@@ -430,6 +438,20 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         }
 
         if (event.type == 'onComplete') {
+          if (!_vasSaleInProgress) {
+            debugPrint(
+              '[VAS] Ignoring stale onComplete because no app-initiated vasSale is active.',
+            );
+            return;
+          }
+          final saleAgeMs = _vasSaleStartedAt == null
+              ? null
+              : DateTime.now().difference(_vasSaleStartedAt!).inMilliseconds;
+          debugPrint(
+            '[VAS] Processing app-initiated onComplete (saleAgeMs=$saleAgeMs)',
+          );
+          _vasSaleInProgress = false;
+          _vasSaleStartedAt = null;
           // Parse VAS event data
           try {
             Map<String, dynamic> data = {};
@@ -491,13 +513,15 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                       isNfc: true, cardNumber: cardNumber, logNo: logNo);
                 }
               } else {
-                // Should not happen for a successful sale
-                _showResultDialog(
-                    'ชำระเงินสำเร็จ', 'ตัดเงินผ่านบัตรเรียบร้อยแล้ว',
-                    isSuccess: true,
-                    isTapOut: true,
-                    topStatus: 'PAYMENT SUCCESS',
-                    soundSequence: _tapOutSuccessSounds(isNfc: true));
+                debugPrint(
+                  '[VAS] Ignoring successful VAS event without card number.',
+                );
+                if (mounted) {
+                  setState(() {
+                    _isProcessing = false;
+                    _isLoading = false;
+                  });
+                }
               }
             } else {
               String cause = 'ระบบไม่สามารถดึงเงินจากบัตรได้';
@@ -524,6 +548,20 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                 isSuccess: false, soundSequence: _failureSounds(isNfc: true));
           }
         } else if (event.type == 'onError') {
+          if (!_vasSaleInProgress) {
+            debugPrint(
+              '[VAS] Ignoring stale onError because no app-initiated vasSale is active.',
+            );
+            return;
+          }
+          final saleAgeMs = _vasSaleStartedAt == null
+              ? null
+              : DateTime.now().difference(_vasSaleStartedAt!).inMilliseconds;
+          debugPrint(
+            '[VAS] Processing app-initiated onError (saleAgeMs=$saleAgeMs)',
+          );
+          _vasSaleInProgress = false;
+          _vasSaleStartedAt = null;
           _showResultDialog('ข้อผิดพลาด', 'ไม่สามารถทำรายการได้\n${event.data}',
               isSuccess: false, soundSequence: _failureSounds(isNfc: true));
         }
@@ -835,6 +873,10 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   // Duplicate scan protection
   String? _lastScannedCardId;
   DateTime? _lastScannedTime;
+  static const Duration _startupNfcWarmup = Duration(seconds: 5);
+  DateTime? _ignoreNfcEventsUntil;
+  bool _vasSaleInProgress = false;
+  DateTime? _vasSaleStartedAt;
 
   // GPS source toggle helper
   Future<(double, double)> _getGpsForNfc() async {
@@ -977,9 +1019,24 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
   // ============ Event Handlers ============
   Future<void> _handleNfcDetected() async {
+    final now = DateTime.now();
+    final ignoreUntil = _ignoreNfcEventsUntil;
+    if (ignoreUntil != null && now.isBefore(ignoreUntil)) {
+      debugPrint(
+        '[NFC] Ignoring startup NFC event until $ignoreUntil',
+      );
+      return;
+    }
+
     if (_isProcessing || _isLoading) return;
+    if (_vasSaleInProgress) {
+      debugPrint('[NFC] Ignoring NFC event while VAS sale is in progress');
+      return;
+    }
 
     _isProcessing = true;
+    _vasSaleInProgress = true;
+    _vasSaleStartedAt = now;
 
     if (mounted) {
       setState(() {
@@ -993,6 +1050,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       // Processing and Loading will be reset in onVasEvent
     } catch (e) {
       debugPrint('[NFC] ❌ VAS Sale Trigger Failed: $e');
+      _vasSaleInProgress = false;
+      _vasSaleStartedAt = null;
       if (mounted) {
         setState(() {
           _isProcessing = false;
@@ -1462,6 +1521,135 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     return issues;
   }
 
+  Future<bool> _postTransactionPayload({
+    required Uri url,
+    required Map<String, dynamic> payload,
+    required String label,
+  }) async {
+    debugPrint('[DEBUG] Submitting $label to $url');
+    debugPrint('[DEBUG] Payload: ${jsonEncode(payload)}');
+
+    final response = await http.post(
+      url,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode(payload),
+    );
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      debugPrint(
+        '[DEBUG] $label submitted successfully (${response.statusCode})',
+      );
+      return true;
+    }
+
+    debugPrint(
+      '[DEBUG] $label failed: ${response.statusCode} - ${response.body}',
+    );
+    return false;
+  }
+
+  Future<EmvTransactionRequest> _buildFlatRateTransactionRequest(
+    TransactionRequest originalPayload, {
+    required BusTrip activeBusTrip,
+    int? routeId,
+  }) async {
+    final firstTxn = originalPayload.transactions.first;
+    final effectiveRouteId = routeId ?? activeBusTrip.routeId;
+    final tapInStop = await _dbHelper.getNearestBusStop(
+      firstTxn.tapInLoc.lat,
+      firstTxn.tapInLoc.lng,
+      routeId: effectiveRouteId,
+    );
+    final tapOutStop = await _dbHelper.getNearestBusStop(
+      firstTxn.tapOutLoc.lat,
+      firstTxn.tapOutLoc.lng,
+      routeId: effectiveRouteId,
+    );
+
+    final tapInDistance = tapInStop == null
+        ? 0.0
+        : _haversineDistance(
+            firstTxn.tapInLoc.lat,
+            firstTxn.tapInLoc.lng,
+            tapInStop.latitude,
+            tapInStop.longitude,
+          );
+    final tapOutDistance = tapOutStop == null
+        ? 0.0
+        : _haversineDistance(
+            firstTxn.tapOutLoc.lat,
+            firstTxn.tapOutLoc.lng,
+            tapOutStop.latitude,
+            tapOutStop.longitude,
+          );
+    final flatPrice = activeBusTrip.flatPrice;
+
+    final tapInLoc = EmvTapLocation(
+      latitude: firstTxn.tapInLoc.lat,
+      longitude: firstTxn.tapInLoc.lng,
+      busstopId: tapInStop?.busstopId ?? 0,
+      busstopName: tapInStop?.busstopDesc ?? '',
+      busstopLatitude: tapInStop?.latitude ?? 0.0,
+      busstopLongitude: tapInStop?.longitude ?? 0.0,
+      busstopDistance: tapInDistance,
+      gpsbusstopName: tapInStop?.busstopDesc ?? '',
+      gpsbusstopLatitude: firstTxn.tapInLoc.lat,
+      gpsbusstopLongitude: firstTxn.tapInLoc.lng,
+      gpsBoxId: '',
+      gpsRecDatetime: firstTxn.tapInTime,
+      gpsSpeed: 0.0,
+    );
+    final tapOutLoc = EmvTapLocation(
+      latitude: firstTxn.tapOutLoc.lat,
+      longitude: firstTxn.tapOutLoc.lng,
+      busstopId: tapOutStop?.busstopId ?? 0,
+      busstopName: tapOutStop?.busstopDesc ?? '',
+      busstopLatitude: tapOutStop?.latitude ?? 0.0,
+      busstopLongitude: tapOutStop?.longitude ?? 0.0,
+      busstopDistance: tapOutDistance,
+      gpsbusstopName: tapOutStop?.busstopDesc ?? '',
+      gpsbusstopLatitude: firstTxn.tapOutLoc.lat,
+      gpsbusstopLongitude: firstTxn.tapOutLoc.lng,
+      gpsBoxId: '',
+      gpsRecDatetime: firstTxn.tapOutTime,
+      gpsSpeed: 0.0,
+    );
+    final fareInfo = EmvFareInfo(
+      bustripId: activeBusTrip.id,
+      routeId: activeBusTrip.routeId,
+      buslineId: activeBusTrip.buslineId,
+      businfoId: activeBusTrip.businfoId,
+      busNo: activeBusTrip.busno,
+      isMorning: false,
+      isExpress: false,
+      morningAmount: 0.0,
+      expressAmount: 0.0,
+      fareAmount: flatPrice,
+      totalAmount: flatPrice,
+      isFlatRate: activeBusTrip.isFlatRate,
+      flatPrice: flatPrice,
+    );
+
+    return EmvTransactionRequest(
+      deviceId: originalPayload.deviceId,
+      plateNo: originalPayload.plateNo,
+      isFlatRate: activeBusTrip.isFlatRate,
+      flatPrice: flatPrice,
+      transactions: [
+        EmvTransactionItem(
+          txnId: firstTxn.txnId,
+          assetId: firstTxn.assetId,
+          assetType: firstTxn.assetType,
+          tapInTime: firstTxn.tapInTime,
+          tapInLoc: tapInLoc,
+          tapOutTime: firstTxn.tapOutTime,
+          tapOutLoc: tapOutLoc,
+          fareInfo: fareInfo,
+        ),
+      ],
+    );
+  }
+
   Future<void> _submitTransaction(
     TransactionRequest payload,
     String aid, {
@@ -1469,17 +1657,38 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     bool isNfc = false,
     String? logNo,
   }) async {
-    final url = Uri.parse(
-      'https://tng-platform-dev.atlasicloud.com/api/tng/tap/transactions',
-    );
     try {
-      final response = await http.post(
-        url,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode(payload.toJson()),
-      );
+      final activeBusTrip = await _dbHelper.getActiveBusTrip();
+      final isFlatRate = activeBusTrip?.isFlatRate ?? false;
+      final effectiveRouteId = routeId ?? activeBusTrip?.routeId;
+      bool submitted = true;
 
-      if (response.statusCode >= 200 && response.statusCode < 300) {
+      if (!isNfc) {
+        if (isFlatRate && activeBusTrip != null) {
+          final flatRatePayload = await _buildFlatRateTransactionRequest(
+            payload,
+            activeBusTrip: activeBusTrip,
+            routeId: effectiveRouteId,
+          );
+          submitted = await _postTransactionPayload(
+            url: _flatRateTransactionsUrl,
+            payload: flatRatePayload.toJson(),
+            label: 'Flat-rate Transaction',
+          );
+        } else {
+          submitted = await _postTransactionPayload(
+            url: _transactionsUrl,
+            payload: payload.toJson(),
+            label: 'Transaction',
+          );
+        }
+      } else {
+        debugPrint(
+          '[EMV] Skip /transactions. EMV will be submitted to /transactions/emv (isFlatRate=$isFlatRate).',
+        );
+      }
+
+      if (submitted) {
         setState(() {
           _pendingTransactions.remove(aid);
         });
@@ -1505,7 +1714,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
           _pendingEmvRequests.add(
             _PendingEmvRequest(
               payload: payload,
-              routeId: routeId,
+              routeId: effectiveRouteId,
               tapOutTime: tapOutTime,
               logNo: logNo,
             ),
@@ -1538,7 +1747,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
           final tapOutStop = await _dbHelper.getNearestBusStop(
             lat,
             lng,
-            routeId: routeId,
+            routeId: effectiveRouteId,
           );
 
           if (tapOutStop != null) {
@@ -1553,7 +1762,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
             final tapInStop = await _dbHelper.getNearestBusStop(
               firstTxn.tapInLoc.lat,
               firstTxn.tapInLoc.lng,
-              routeId: routeId,
+              routeId: effectiveRouteId,
             );
 
             if (tapInStop != null) {
@@ -1562,14 +1771,18 @@ class _WelcomeScreenState extends State<WelcomeScreen>
               );
 
               // 3. Calculate Fare
-              final fare = await _dbHelper.getFare(
-                tapInStop.seq,
-                tapOutStop.seq,
-                routeId: routeId,
-              );
+              final fare = isFlatRate
+                  ? activeBusTrip?.flatPrice
+                  : await _dbHelper.getFare(
+                      tapInStop.seq,
+                      tapOutStop.seq,
+                      routeId: effectiveRouteId,
+                    );
               if (fare != null) {
                 priceDisplay = '${fare.toStringAsFixed(2)} ฿';
-                debugPrint('[DEBUG] 💰 Calculated Fare: $priceDisplay');
+                debugPrint(
+                  '[DEBUG] 💰 ${isFlatRate ? "Flat-rate" : "Calculated"} Fare: $priceDisplay',
+                );
 
                 // --- ARKE EMV PAYMENT INTEGRATION (BYPASSED) ---
                 try {
@@ -1659,7 +1872,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       } else {
         _showResultDialog(
           'ทำรายการไม่สำเร็จ',
-          'รหัสข้อผิดพลาด: ${response.statusCode}',
+          'ไม่สามารถส่งข้อมูลธุรกรรมไปยัง API ได้',
           isSuccess: false,
           soundSequence: _failureSounds(isNfc: isNfc),
         );
@@ -1787,7 +2000,11 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
       // --- Fare ---
       double fareAmount = 0.0;
-      if (tapInStop != null && tapOutStop != null) {
+      final isFlatRate = activeBusTrip?.isFlatRate ?? false;
+      final flatPrice = activeBusTrip?.flatPrice ?? 0.0;
+      if (isFlatRate) {
+        fareAmount = flatPrice;
+      } else if (tapInStop != null && tapOutStop != null) {
         fareAmount = await _dbHelper.getFare(
               tapInStop.seq,
               tapOutStop.seq,
@@ -1796,7 +2013,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
             0.0;
       }
       debugPrint(
-        '[EMV] 💰 Fare: $fareAmount (tapInSeq=${tapInStop?.seq}, tapOutSeq=${tapOutStop?.seq})',
+        '[EMV] 💰 Fare: $fareAmount (isFlatRate=$isFlatRate, flatPrice=$flatPrice, tapInSeq=${tapInStop?.seq}, tapOutSeq=${tapOutStop?.seq})',
       );
 
       // --- Device GPS (เครื่อง POS หรือ โทรศัพท์) ---
@@ -1905,6 +2122,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         expressAmount: 0.0,
         fareAmount: fareAmount,
         totalAmount: fareAmount,
+        isFlatRate: isFlatRate,
+        flatPrice: flatPrice,
       );
 
       // Build EmvTransactionItem
@@ -1923,6 +2142,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       final emvRequest = EmvTransactionRequest(
         deviceId: originalPayload.deviceId,
         plateNo: originalPayload.plateNo,
+        isFlatRate: isFlatRate,
+        flatPrice: flatPrice,
         transactions: [emvTxnItem],
       );
 
