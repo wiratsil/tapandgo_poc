@@ -1,12 +1,14 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:cpay_sdk_plugin/cpay_sdk_plugin.dart';
 import 'package:arke_sdk_flutter/arke_sdk_flutter.dart';
+import 'package:tapgo_terminal_plugin/tapgo_terminal_plugin.dart';
 
-enum PosType { arke, cpay, unknown }
+enum PosType { arke, tapgo, cpay, unknown }
 
 /// Unified POS Service that abstracts Arke (USDK) and CPay SDK.
 ///
@@ -17,6 +19,10 @@ enum PosType { arke, cpay, unknown }
 /// On Arke devices:
 ///   - NFC is blocking: startNfcScan() blocks until a card is tapped,
 ///     so we run it in a polling loop that emits events to the same stream.
+///
+/// On TapGo devices:
+///   - NFC is event-based: startNfc() starts the native loop and nfcResult
+///     events are bridged back into the same unified stream.
 
 class CardReadResult {
   final String cardId;
@@ -31,15 +37,21 @@ class PosService {
 
   final _arke = ArkeSdkFlutter();
   final _cpay = CpaySdkPlugin();
+  final _tapgo = TapgoTerminalPlugin.instance;
 
   PosType _type = PosType.unknown;
   PosType get type => _type;
   bool get isArke => _type == PosType.arke;
+  bool get isTapgo => _type == PosType.tapgo;
+  bool get supportsVas => _type == PosType.arke;
 
   // NFC card detection stream (unified for both devices)
   StreamController<bool> _nfcController = StreamController<bool>.broadcast();
   Stream<bool> get onNfcCardDetected => _nfcController.stream;
+  StreamController<String> _qrController = StreamController<String>.broadcast();
+  Stream<String> get onQrCodeDetected => _qrController.stream;
   StreamSubscription? _cpayNfcSub;
+  StreamSubscription<TerminalEvent>? _tapgoEventSub;
 
   // Arke NFC polling
   bool _arkeNfcPollingActive = false;
@@ -47,6 +59,8 @@ class PosService {
 
   // Store last read card ID from Arke (since Arke reads during poll)
   String? _lastArkeCardId;
+  String? _lastTapgoCardId;
+  String? _lastTapgoRawData;
 
   /// Detect device type (call once at startup)
   Future<void> init() async {
@@ -54,6 +68,11 @@ class PosService {
     if (_nfcController.isClosed) {
       _nfcController = StreamController<bool>.broadcast();
     }
+    if (_qrController.isClosed) {
+      _qrController = StreamController<String>.broadcast();
+    }
+    _cpayNfcSub?.cancel();
+    _tapgoEventSub?.cancel();
 
     try {
       // Use getTerminalInfo() instead of getPlatformVersion() for detection.
@@ -74,6 +93,33 @@ class PosService {
       debugPrint('[PosService] Not an Arke device: $e');
     }
 
+    try {
+      final initResult = await _tapgo.initialize().timeout(
+            const Duration(seconds: 3),
+          );
+      final capabilities = await _tapgo.getCapabilities().timeout(
+            const Duration(seconds: 3),
+          );
+      final platformInfo = await _tapgo.getPlatformInfo().timeout(
+            const Duration(seconds: 3),
+          );
+
+      if (initResult.success && capabilities.vendorReaderServiceInstalled) {
+        _type = PosType.tapgo;
+        debugPrint(
+          '[PosService] 📟 Detected: TAPGO - ${platformInfo.model} (${platformInfo.manufacturer})',
+        );
+        _bindTapgoEvents();
+        return;
+      }
+
+      debugPrint(
+        '[PosService] TapGo not selected: readerServiceInstalled=${capabilities.vendorReaderServiceInstalled}',
+      );
+    } catch (e) {
+      debugPrint('[PosService] Not a TapGo device: $e');
+    }
+
     // Fallback to CPay
     _type = PosType.cpay;
     debugPrint('[PosService] 📟 Detected: CPAY');
@@ -83,6 +129,37 @@ class PosService {
     _cpayNfcSub = _cpay.onNfcCardDetected.listen((present) {
       if (!_nfcController.isClosed) {
         _nfcController.add(present);
+      }
+    });
+  }
+
+  void _bindTapgoEvents() {
+    _tapgoEventSub?.cancel();
+    _tapgoEventSub = _tapgo.events.listen((event) {
+      debugPrint(
+        '[PosService][TapGo] ${event.type}: ${event.message ?? ''} payload=${event.payload}',
+      );
+
+      if (event.type == 'nfcResult') {
+        final pan = event.payload['pan']?.toString();
+        if (pan == null || pan.isEmpty) {
+          return;
+        }
+
+        _lastTapgoCardId = pan;
+        _lastTapgoRawData = jsonEncode(event.payload);
+        if (!_nfcController.isClosed) {
+          _nfcController.add(true);
+        }
+      } else if (event.type == 'qrScanned') {
+        final code = event.payload['code']?.toString();
+        if (code == null || code.isEmpty) {
+          return;
+        }
+
+        if (!_qrController.isClosed) {
+          _qrController.add(code);
+        }
       }
     });
   }
@@ -163,6 +240,8 @@ class PosService {
     try {
       if (_type == PosType.arke) {
         await _arke.beep(milliseconds: 500);
+      } else if (_type == PosType.tapgo) {
+        await _tapgo.playBuzzer(durationMs: 500);
       } else {
         await _cpay.beep();
       }
@@ -179,9 +258,42 @@ class PosService {
   Future<void> startNfcPolling() async {
     if (_type == PosType.arke) {
       _startArkeNfcLoop();
+    } else if (_type == PosType.tapgo) {
+      final result = await _tapgo.startNfc();
+      debugPrint(
+        '[PosService] TapGo startNfc => success=${result.success}, message=${result.message}',
+      );
     } else {
       await _cpay.startNfcPolling(intervalMs: 500);
     }
+  }
+
+  // ==================== QR ====================
+
+  Future<void> startQrScanning() async {
+    if (_type == PosType.tapgo) {
+      final result = await _tapgo.startQr();
+      debugPrint(
+        '[PosService] TapGo startQr => success=${result.success}, message=${result.message}',
+      );
+      return;
+    }
+
+    debugPrint(
+        '[PosService] Dedicated QR scanning is not supported on this POS type.');
+  }
+
+  Future<void> stopQrScanning() async {
+    if (_type == PosType.tapgo) {
+      final result = await _tapgo.stopQr();
+      debugPrint(
+        '[PosService] TapGo stopQr => success=${result.success}, message=${result.message}',
+      );
+      return;
+    }
+
+    debugPrint(
+        '[PosService] Dedicated QR scanning is not supported on this POS type.');
   }
 
   /// Stop NFC polling.
@@ -189,6 +301,11 @@ class PosService {
     if (_type == PosType.arke) {
       _arkeNfcPollingActive = false;
       _arkeNfcPollingSession++;
+    } else if (_type == PosType.tapgo) {
+      final result = await _tapgo.stopNfc();
+      debugPrint(
+        '[PosService] TapGo stopNfc => success=${result.success}, message=${result.message}',
+      );
     } else {
       await _cpay.stopNfcPolling();
     }
@@ -260,6 +377,13 @@ class PosService {
       _lastArkeCardId = null; // Consume it
       if (id == null) return null;
       return CardReadResult(id, id);
+    } else if (_type == PosType.tapgo) {
+      final id = _lastTapgoCardId;
+      final rawData = _lastTapgoRawData;
+      _lastTapgoCardId = null;
+      _lastTapgoRawData = null;
+      if (id == null || id.isEmpty) return null;
+      return CardReadResult(id, rawData ?? id);
     } else {
       try {
         final emvData = await _cpay.readCardEmv();
@@ -291,8 +415,8 @@ class PosService {
   /// - CPay: returns lat,lng string from SDK.
   /// - Arke: returns null (no built-in GPS, app uses MQTT GPS instead).
   Future<String?> getLocation() async {
-    if (_type == PosType.arke) {
-      return null; // Arke doesn't have device GPS, fallback to MQTT
+    if (_type == PosType.arke || _type == PosType.tapgo) {
+      return null; // Arke/TapGo fallback to app-managed GPS
     } else {
       try {
         return await _cpay.getLocation();
@@ -363,8 +487,12 @@ class PosService {
     _arkeNfcPollingActive = false;
     _arkeNfcPollingSession++;
     _cpayNfcSub?.cancel();
+    _tapgoEventSub?.cancel();
     if (!_nfcController.isClosed) {
       _nfcController.close();
+    }
+    if (!_qrController.isClosed) {
+      _qrController.close();
     }
   }
 }

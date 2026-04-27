@@ -124,6 +124,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   bool _useDeviceGps = false; // GPS source toggle for NFC fare calculation
 
   StreamSubscription<bool>? _nfcSubscription;
+  StreamSubscription<String>? _posQrSubscription;
   String _qrCodePayload = ''; // Payload for the generated QR Code
   bool _showQrScanner = false;
   bool _showSimulateButtons = false;
@@ -423,6 +424,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       await _posService.init();
       await _posService.initVas(); // Initialize VAS Service
       if (mounted) setState(() {});
+      await _syncDedicatedQrScannerMode();
 
       // Set up VAS event listener
       _posService.onVasEvent?.listen((event) async {
@@ -907,6 +909,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_qrScannerModeKey, value);
     unawaited(_refreshSystemChecklistStatus());
+    await _syncDedicatedQrScannerMode();
     debugPrint(
       '[QR] Display mode changed to: ${value ? "Scanner" : "QR Code"}',
     );
@@ -916,14 +919,33 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     if (!mounted) return;
 
     setState(() {
-      _qrScannerController.dispose();
-      _qrScannerController = _createQrScannerController();
+      if (!_posService.isTapgo) {
+        _qrScannerController.dispose();
+        _qrScannerController = _createQrScannerController();
+      }
       _isQrScanDialogOpen = false;
       _lastQrScanValue = null;
       _lastQrScanTime = null;
     });
 
+    unawaited(_syncDedicatedQrScannerMode());
     debugPrint('[QR] Scanner controller reset');
+  }
+
+  Future<void> _syncDedicatedQrScannerMode() async {
+    if (!_posService.isTapgo) {
+      return;
+    }
+
+    _posQrSubscription ??= _posService.onQrCodeDetected.listen((rawValue) {
+      unawaited(_handleScannedQrValue(rawValue, source: 'tapgo'));
+    });
+
+    if (_showQrScanner) {
+      await _posService.startQrScanning();
+    } else {
+      await _posService.stopQrScanning();
+    }
   }
 
   @override
@@ -933,8 +955,10 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     _systemChecklistTimer?.cancel();
     _pendingSyncSubscription?.cancel();
     _gpsSubscription?.cancel();
+    _posQrSubscription?.cancel();
     _mqttService.disconnect();
     _stopBackgroundScanning();
+    unawaited(_posService.stopQrScanning());
     _qrScannerController.dispose();
     _posService.dispose();
     unawaited(AppAudioService.instance.dispose());
@@ -1035,8 +1059,8 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     }
 
     _isProcessing = true;
-    _vasSaleInProgress = true;
-    _vasSaleStartedAt = now;
+    _vasSaleInProgress = _posService.supportsVas;
+    _vasSaleStartedAt = _posService.supportsVas ? now : null;
 
     if (mounted) {
       setState(() {
@@ -1045,22 +1069,72 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     }
 
     try {
-      debugPrint('[NFC] 💳 Starting 1 THB sale for card identification...');
-      await _posService.vasSale(1.0);
-      // Processing and Loading will be reset in onVasEvent
-    } catch (e) {
-      debugPrint('[NFC] ❌ VAS Sale Trigger Failed: $e');
-      _vasSaleInProgress = false;
-      _vasSaleStartedAt = null;
-      if (mounted) {
-        setState(() {
-          _isProcessing = false;
-          _isLoading = false;
-        });
+      if (_posService.supportsVas) {
+        debugPrint('[NFC] 💳 Starting 1 THB sale for card identification...');
+        await _posService.vasSale(1.0);
+        // Processing and Loading will be reset in onVasEvent
+        return;
       }
-      _showResultDialog('ข้อผิดพลาด', 'ไม่สามารถเรียกใช้งาน SDK ได้\n$e',
+
+      debugPrint('[NFC] 💳 Starting direct card read...');
+      await _handleDirectNfcDetected();
+    } catch (e) {
+      debugPrint('[NFC] ❌ SDK flow failed: $e');
+      _resetActiveNfcFlow();
+      _showResultDialog('ข้อผิดพลาด', 'ไม่สามารถอ่านข้อมูลบัตรได้\n$e',
           isSuccess: false, soundSequence: _failureSounds(isNfc: true));
     }
+  }
+
+  void _resetActiveNfcFlow() {
+    _vasSaleInProgress = false;
+    _vasSaleStartedAt = null;
+
+    if (mounted) {
+      setState(() {
+        _isProcessing = false;
+        _isLoading = false;
+      });
+      return;
+    }
+
+    _isProcessing = false;
+    _isLoading = false;
+  }
+
+  Future<void> _handleDirectNfcDetected() async {
+    final cardRead = await _posService.readCardId();
+    final rawCardId = cardRead?.cardId.trim();
+    if (rawCardId == null || rawCardId.isEmpty) {
+      debugPrint('[NFC] No card data returned from POS plugin');
+      _resetActiveNfcFlow();
+      return;
+    }
+
+    debugPrint('[NFC] Direct card read success: $rawCardId');
+    _vasSaleInProgress = false;
+    _vasSaleStartedAt = null;
+
+    final pendingKey = _findPendingTransactionKey(rawCardId);
+    final nfcData = QrData(
+      aid: pendingKey ?? _normalizeCardKey(rawCardId),
+      bal: 100.00,
+    );
+
+    if (pendingKey != null) {
+      await _handleTapOut(
+        nfcData,
+        isNfc: true,
+        cardNumber: rawCardId,
+      );
+      return;
+    }
+
+    await _handleTapIn(
+      nfcData,
+      isNfc: true,
+      cardNumber: rawCardId,
+    );
   }
 
   // ============ Shared Logic ============
@@ -2198,6 +2272,9 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   }) {
     if (!mounted) return;
 
+    if (_posService.isTapgo && _showQrScanner) {
+      unawaited(_posService.stopQrScanning());
+    }
     _stopBackgroundScanning();
     unawaited(AppAudioService.instance.playSequence(soundSequence));
 
@@ -2217,6 +2294,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         Future<void>.delayed(const Duration(milliseconds: 500), () async {
           if (!mounted || _isBackgroundScanningActive) return;
           await _startBackgroundScanning();
+          await _syncDedicatedQrScannerMode();
         });
       }
     }
@@ -2315,13 +2393,13 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     return null;
   }
 
-  Future<void> _handleQrCodeDetected(BarcodeCapture capture) async {
+  Future<void> _handleScannedQrValue(
+    String rawValue, {
+    required String source,
+  }) async {
     if (_isQrScanDialogOpen || _isProcessing || _isLoading) return;
-    if (capture.barcodes.isEmpty) return;
-
-    final rawValue = capture.barcodes.first.rawValue;
-    if (rawValue == null || rawValue.isEmpty) return;
-    debugPrint('[QR] Raw scan value: $rawValue');
+    if (rawValue.isEmpty) return;
+    debugPrint('[QR][$source] Raw scan value: $rawValue');
 
     final now = DateTime.now();
     if (_lastQrScanValue == rawValue &&
@@ -2344,13 +2422,11 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     try {
       final qrData = _parseQrDataFromScan(rawValue);
       if (qrData == null) {
-        debugPrint('[QR] Parsed scan payload is not QrData(aid, bal, exp)');
-        _showResultDialog(
-          'QR Code ไม่ถูกต้อง',
-          'ไม่สามารถอ่านข้อมูลบัตรจาก QR Code นี้ได้',
-          isSuccess: false,
-          soundSequence: _failureSounds(isNfc: false),
-        );
+        debugPrint('[QR][$source] Ignoring non-Tap&Go QR payload.');
+        _isProcessing = false;
+        if (mounted) {
+          setState(() {});
+        }
         return;
       }
 
@@ -2361,11 +2437,11 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
       if (pendingKey != null) {
         debugPrint(
-            '[QR] Routing scan to TAP-OUT flow | aid=${effectiveQrData.aid}');
+            '[QR][$source] Routing scan to TAP-OUT flow | aid=${effectiveQrData.aid}');
         await _handleTapOut(effectiveQrData);
       } else {
         debugPrint(
-            '[QR] Routing scan to TAP-IN flow | aid=${effectiveQrData.aid}');
+            '[QR][$source] Routing scan to TAP-IN flow | aid=${effectiveQrData.aid}');
         await _handleTapIn(effectiveQrData);
       }
     } finally {
@@ -2373,8 +2449,69 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     }
   }
 
+  Future<void> _handleQrCodeDetected(BarcodeCapture capture) async {
+    if (capture.barcodes.isEmpty) return;
+
+    final rawValue = capture.barcodes.first.rawValue;
+    if (rawValue == null || rawValue.isEmpty) return;
+
+    await _handleScannedQrValue(rawValue, source: 'camera');
+  }
+
   Widget _buildQrDisplayPanel() {
     if (_showQrScanner) {
+      if (_posService.isTapgo) {
+        return Container(
+          color: const Color(0xFF101820),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Container(
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.greenAccent, width: 2),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+              ),
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: const [
+                      Icon(
+                        Icons.qr_code_scanner_rounded,
+                        color: Colors.greenAccent,
+                        size: 72,
+                      ),
+                      SizedBox(height: 16),
+                      Text(
+                        'TapGo QR Scanner Ready',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      SizedBox(height: 8),
+                      Text(
+                        'กรุณาใช้หัวสแกน QR ของเครื่องเพื่ออ่านโค้ด',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white70,
+                          fontSize: 13,
+                          height: 1.4,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      }
+
       return Stack(
         fit: StackFit.expand,
         children: [

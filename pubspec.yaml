@@ -21,6 +21,9 @@ dependencies:
     git:
       url: https://github.com/wiratsil/arke_sdk_flutter.git
 
+  tapgo_terminal_plugin:
+    path: plugins/tapgo_terminal_plugin
+
   http: ^1.1.0
   uuid: ^4.2.0
   shared_preferences: ^2.2.0

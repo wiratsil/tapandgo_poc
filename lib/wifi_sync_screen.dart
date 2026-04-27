@@ -2321,6 +2321,97 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<String?> _scanQrCode() async {
+    if (_posService.isTapgo) {
+      StreamSubscription<String>? qrSub;
+
+      Future<void> stopTapgoQr() async {
+        await qrSub?.cancel();
+        await _posService.stopQrScanning();
+      }
+
+      await _posService.startQrScanning();
+
+      return showDialog<String>(
+        context: context,
+        builder: (context) {
+          qrSub ??= _posService.onQrCodeDetected.listen((value) {
+            if (value.isNotEmpty && Navigator.of(context).canPop()) {
+              Navigator.of(context).pop(value);
+            }
+          });
+
+          return Dialog(
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            child: Container(
+              height: 320,
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  const Text(
+                    'สแกน QR Code จากเครื่อง Host',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 16),
+                  Expanded(
+                    child: Container(
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF101820),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: Colors.greenAccent,
+                          width: 2,
+                        ),
+                      ),
+                      child: const Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.qr_code_scanner_rounded,
+                            color: Colors.greenAccent,
+                            size: 72,
+                          ),
+                          SizedBox(height: 16),
+                          Text(
+                            'TapGo QR Scanner Ready',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          SizedBox(height: 8),
+                          Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 20),
+                            child: Text(
+                              'กรุณาใช้หัวสแกน QR ของเครื่องเพื่ออ่าน QR ของ Host',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: Colors.white70,
+                                fontSize: 13,
+                                height: 1.4,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('ยกเลิก'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ).whenComplete(stopTapgoQr);
+    }
+
     const cameraChannel =
         MethodChannel('com.example.tapandgo_poc/camera_check');
     int cameraCount = 0;

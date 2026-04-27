@@ -751,6 +751,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.3.0+3"
+  tapgo_terminal_plugin:
+    dependency: "direct main"
+    description:
+      path: "plugins/tapgo_terminal_plugin"
+      relative: true
+    source: path
+    version: "0.1.0"
   term_glyph:
     dependency: transitive
     description:

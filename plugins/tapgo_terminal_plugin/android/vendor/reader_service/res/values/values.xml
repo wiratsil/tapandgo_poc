@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="RESULT_CODE_DEVICE_NOT_FOUND">设备未找到</string>
+    <string name="RESULT_CODE_INITIALIZED">已初始化</string>
+    <string name="RESULT_CODE_INVALID_PARAMETER">非法参数</string>
+    <string name="RESULT_CODE_NOT_DEFINED">未定义错误</string>
+    <string name="RESULT_CODE_NOT_ENOUGH_CACHE">缓存不足</string>
+    <string name="RESULT_CODE_NOT_INITIALIZED">未初始化</string>
+    <string name="RESULT_CODE_NOT_SUPPORTED">暂时未支持</string>
+    <string name="RESULT_CODE_PERMISSION_DENIED">权限不足</string>
+    <string name="RESULT_CODE_SUCCESS">操作成功</string>
+    <string name="RESULT_CODE_TIMEOUT">超时</string>
+    <string name="RESULT_CODE_TRANSPORT_FAILED">传输失败</string>
+    <string name="RESULT_CODE_UNKNOWN">未知错误</string>
+</resources>

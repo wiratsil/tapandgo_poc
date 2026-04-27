@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="RESULT_CODE_DEVICE_NOT_FOUND">device_not_found</string>
+    <string name="RESULT_CODE_INITIALIZED">initialized</string>
+    <string name="RESULT_CODE_INVALID_PARAMETER">invalid_parameter</string>
+    <string name="RESULT_CODE_NOT_DEFINED">not_defined</string>
+    <string name="RESULT_CODE_NOT_ENOUGH_CACHE">not_enough_cache</string>
+    <string name="RESULT_CODE_NOT_INITIALIZED">not_initialized</string>
+    <string name="RESULT_CODE_NOT_SUPPORTED">not_supported</string>
+    <string name="RESULT_CODE_PERMISSION_DENIED">permission_denied</string>
+    <string name="RESULT_CODE_SUCCESS">success</string>
+    <string name="RESULT_CODE_TIMEOUT">timeout</string>
+    <string name="RESULT_CODE_TRANSPORT_FAILED">transport_failed</string>
+    <string name="RESULT_CODE_UNKNOWN">unknown</string>
+</resources>
